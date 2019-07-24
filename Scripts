@@ -166,3 +166,13 @@ elif [ $# -ge 2 ];then
         fi
         echo "All the files have been archived."
 fi
+
+#
+#!/usr/bin/perl -w
+#use strict;
+my $a="Number of target regions with coverage below 100 ";
+#chomp($mySTR);
+$a =~m/(\d+)/g;
+$a =~s/(\d+)/$1/g;
+print "$&\n";
+print "$a\n";
