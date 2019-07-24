@@ -1,0 +1,168 @@
+#Sampling reads from the fastq files.
+#!/bin/bash
+echo -e "Usage:\n
+        FASTQ_R1 ---Paired-End Sequencing R1 file.\n
+        FASTQ_R2 ---Paired-ENd Sequencing R2 file.\n
+        Sampled_Pro ---Sampling Proportion.\n
+        Outpath ---The path that the sampled results are placed.\n
+        Depth ---The fastq depth of coverage.\n"
+FASTQ_R1="$1"
+FASTQ_R2="$2"
+Sampled_Pro="$3"
+Outpath="$4"
+Depth="$5"
+Suffix=".fastq"
+MJoin="_sampled_"
+if [ $# == "5" ];then
+        Prefix_R1=`echo "$FASTQ_R1" | sed "s/\(.*\)\.fastq$/\1/g"`
+        Out_R1=${Prefix_R1}${MJoin}${Depth}${Suffix}
+        seqkit sample -p $Sampled_Pro -s 123 -o $Outpath/$Out_R1 $FASTQ_R1 #123,200
+        echo "R1 file name: $Out_R1"
+        Prefix_R2=`echo "$FASTQ_R2" | sed "s/\(.*\)\.fastq$/\1/g"`
+        Out_R2=${Prefix_R2}${MJoin}${Depth}${Suffix}
+        seqkit sample -p $Sampled_Pro -s 123 -o $Outpath/$Out_R2 $FASTQ_R2 #123,200
+        echo "R2 file name: $Out_R2"
+fi
+echo "The sampleing are finished from the Paired-End FASTQ files."
+
+
+#Archiving the files
+#!/bin/bash
+
+if [ $# -le 1 ];then
+        echo -e "Usage:
+        \tInputpath\t---The path is placed the CLC analysis results.\n
+        \tFILE_OUT\t---The file is saving the extracting information from the duplicate removal report, mapping summary report and Locally repor
+        \tOutpath\t---The final files are saved in the path.\n"
+        #\tProgram\t---The perl script generates the QC information file.\n
+        exit 1
+elif [ $# -ge 2 ];then
+        PREPATH="/data/clc_result/"
+        Inputpath=${PREPATH}"$1""/output"
+        #Program="$2" #NGS_Bio_QC_Verify.pl
+        FILE_OUT="$2"
+        if [ ${FILE_OUT##*.}!="csv" ];then
+                FILE_OUT=${FILE_OUT%.*}".csv"
+        fi
+        DupR="removal" #"duplicate"
+        MapS="mapping"
+        LocR="coverage"
+        echo "Creating the temp work space ......"
+        WORKDIR=/home/cdx/Temp_CLC
+        if [ ! -d $WORKDIR ];then
+                mkdir -p $WORKDIR
+        fi
+        cd $WORKDIR #/data/clc_result/181218_NB551557_0008_AH55J2AFXY/output
+        rm -rf *
+        cp $Inputpath/*.* $WORKDIR
+        scp cdx@10.20.66.5:/data/PDF/* $WORKDIR
+        #cp $Inputpath/*report.pdf $WORKDIR;#cp $Inputpath/*report\).pdf $WORKDIR
+        DIR="TransTxt"
+        FLAG=0
+        SampleName=(`ls $Inputpath | awk -F "_" '{print $1}' | uniq`)
+        echo "The total number of the samples: " ${#SampleName[*]}
+        echo "Sample Name: " ${SampleName[@]}
+        echo "The pdftohtml is used to extract the QC information from some of reports by generated the CLC."
+        if [ ! -d $DIR ];then
+                mkdir $DIR
+        fi
+        cd $DIR
+        cp $WORKDIR/*report.pdf $WORKDIR/$DIR/
+        cp $WORKDIR/*report\).pdf $WORKDIR/$DIR/
+        echo "Renamed the pdf file in workspace($DIR)."
+        `rename 's/ /_/g' *`
+        `rename 's/[(),]//g' *`
+        echo "Start process of transforming(xml) ......"
+        for Sample in ${SampleName[@]}
+        do
+                echo "Sample: " $Sample
+                if [ `ls ./ | grep "${Sample}_" | grep "$DupR"` ];then
+                        FILE_duplicate=`ls ./ | grep "${Sample}_" | grep "$DupR"`
+                        echo "${FILE_duplicate}"
+                        pdftohtml -i -s -xml -stdout ${FILE_duplicate}
+                else
+                        echo "The duplicate removal pdf does not exist!!!"
+                fi
+                if [ `ls ./ | grep "${Sample}_" | grep "$MapS"` ];then
+                        FILE_mapping=`ls ./ | grep "${Sample}_" | grep "$MapS"`
+                        echo "${FILE_mapping}"
+                        pdftohtml -i -s -xml -stdout ${FILE_mapping}
+                else
+                        echo "The mapping report pdf does not exist!!!"
+                fi
+                if [ `ls ./ | grep "${Sample}_" | grep "$LocR"` ];then
+                        FILE_Locally=`ls ./ | grep "${Sample}_" | grep "$LocR"`
+                        echo "${FILE_Locally}"
+                        pdftohtml -i -s -xml -stdout ${FILE_Locally}
+                else
+                        echo "The locally report pdf does not exist!!!"
+                fi
+                if [ `ls ./ | grep "${Sample}_" | grep "$DupR" | grep "xml"` ];then
+                        File_dup=`ls ./ | grep "${Sample}_" | grep "$DupR" | grep "xml"`
+                else
+                        File_dup="$Sample""_duplicate_removal_report.xml"
+                fi
+                if [ `ls ./ | grep "${Sample}_" | grep "$MapS" | grep "xml"` ];then
+                        File_map=`ls ./ | grep "${Sample}_" | grep "$MapS" | grep "xml"`
+                else
+                        File_map="$Sample""_mapping_summary_report.xml"
+                fi
+                if [ `ls ./ | grep "${Sample}_" | grep "$LocR" | grep "xml"` ];then
+                        File_Loc=`ls ./ | grep "${Sample}_" | grep "$LocR" | grep "xml"`
+                else
+                        File_Loc="$Sample""_Locally_Realigned_coverage_report.xml"
+                fi
+                echo "Transformed files(xml): "
+                echo "${File_dup}"
+                echo "${File_map}"
+                echo "${File_Loc}"
+                FLAG=`expr $FLAG + 1`
+                echo "$FLAG"
+                perl /data/fastq_raw_data/Sampling/Test_CLC_Pipeline/WXDX_NGS_QC_Extract_v2.pl $File_dup $File_map $File_Loc $FILE_OUT $FLAG $In
+        done
+        mv $FILE_OUT ../
+        cd $WORKDIR
+        `rename 's/ /_/g' *`
+        `rename 's/[(),]//g' *`
+        #The all files are ready, and then those files are archived to public directory for reviewing in Lab.
+        echo -e "The all files have been readying to be archived.\nStarting archiving ......\n"
+        OLD_IFS="$IFS"
+        IFS="/"
+        PATH_INFO=($Inputpath)
+        IFS="$OLD_IFS"
+        INDEX=`expr ${#PATH_INFO[*]} - 2`
+        CLC_BATCH_RUN=${PATH_INFO[$INDEX]}
+        if [ ! $3 ];then
+                Outpath="/data/WXDX_NGS"
+        else
+                Outpath="$3"
+        fi
+        cd $Outpath
+        if [ ! -d $CLC_BATCH_RUN ];then
+                mkdir $CLC_BATCH_RUN
+        fi
+        FileName=(`ls $Inputpath | awk -F "_" '{print $1}' | uniq`)
+        #NGS_PROJECT=(`ls $Inputpath | awk -F "_" '{print $1}' | awk -F "-" '{print $1}' | uniq`)
+        cd $CLC_BATCH_RUN
+        for PROJECT in ${FileName[@]}
+        do
+                echo "Project: " $PROJECT
+                NGS_DIR=`echo $PROJECT | sed "s/\(^[A-Z0-9]*[-][A-Z0-9]*\)[-].*/\1/g"`
+                echo "Dir: " $NGS_DIR
+                if [ ! -d $NGS_DIR ];then
+                        mkdir $NGS_DIR
+                        MOVEL_FILE=(`ls $WORKDIR | grep "$NGS_DIR"`)
+                        echo "The total number of the moving files(Prefix $NGS_DIR): " ${#MOVEL_FILE[*]}
+                        for FILE in ${MOVEL_FILE[@]}
+                        do
+                                mv $WORKDIR/$FILE $NGS_DIR/
+                        done
+                fi
+        done
+        if [ -f $WORKDIR/$FILE_OUT ];then
+                mv $WORKDIR/$FILE_OUT $Outpath/$CLC_BATCH_RUN
+        else
+                echo "This NGS project does not need to extract QC information from the CLC analysis results!!!"
+        fi
+        echo "All the files have been archived."
+fi
