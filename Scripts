@@ -393,3 +393,5 @@ foreach(@sample){
 }
 
 #############################################################################################################
+##http://resources.qiagenbioinformatics.com/manuals/clcserver/current/admin/index.php?manual=Command_line_tools.html(CLC analysis tool)###
+
