@@ -1,0 +1,536 @@
+##VCF split SNP/Insertion/Deletion variants script
+#!/usr/bin/perl
+
+open VCF, "<$ARGV[0]" or die "Couldn't open it $!.";
+my @PREFIX=split(/\./,$ARGV[0]);
+my $SNP_FILE=$PREFIX[0]."_SNP.txt";
+open SNP,">$SNP_FILE";#$ARGV[1]
+my $INSERTION_FILE=$PREFIX[0]."_INSERTION.txt";
+open INSERTION,">$INSERTION_FILE";#$ARGV[2]
+my $DELETION_FILE=$PREFIX[0]."_DELETION.txt";
+open DELETION,">$DELETION_FILE";#$ARGV[3]
+my @INFO;
+my $REF_Length;
+my $ALT_Length;
+my $Length_DIFF;
+my $Num=0;
+my $SNP_NUM=0;
+my $INS_NUM=0;
+my $DEL_NUM=0;
+while(<VCF>){
+        chomp;
+        if($_=~m/^\"Chr/){
+                print SNP "$_\n";
+                print INSERTION "$_\n";
+                print DELETION "$_\n";
+                next;
+        }
+        else{
+                @INFO=split("\t",$_);
+                $INFO[2]=~s/ //g;
+                $Num+=1;
+                $INFO[3]=~s/ //g;
+                $INFO[4]=~s/ //g;
+                #if($Num<10){
+                #       print "$INFO[2]\n";
+                #}
+                $REF_Length=length($INFO[3]);
+                my @TEMP=split(",",$INFO[4]);
+                #$ALT_Length=length($INFO[4]);
+                my $LAST=@TEMP;
+                $LAST=$LAST-1;
+                $ALT_Length=length($TEMP[$LAST]);
+                $Length_DIFF=$ALT_Length-$REF_Length;
+                if($Length_DIFF eq 0){
+                        if($INFO[3]=~m/[-]/){
+                                $INS_NUM+=1;
+                                print INSERTION "$_\n";
+                        }
+                        elsif($INFO[4]=~m/[-]/){
+                                $DEL_NUM+=1;
+                                print DELETION "$_\n";
+                        }
+                        else{
+                                $SNP_NUM+=1;
+                                print SNP "$_\n";
+                        }
+                }
+                elsif($Length_DIFF gt 0){
+                        $INS_NUM+=1;
+                        #if($INS_NUM<20){print "$INFO[3]\t$INFO[4]\t$Length_DIFF\n";}
+                        print INSERTION "$_\n";
+                }
+                elsif($Length_DIFF lt 0){
+                        $DEL_NUM+=1;
+                        #if($DEL_NUM<20){print "$INFO[3]\t$INFO[4]\t$Length_DIFF\n";}
+                        print DELETION "$_\n";
+                }
+                #SNP variations
+        }
+
+}
+print "Total snp: $SNP_NUM\n";
+print "Total insertion: $INS_NUM\n";
+print "Total deletion: $DEL_NUM\n";
+print "Total Variants: $Num\n";
+close(VCF);
+close(SNP);
+close(INSERTION);
+close(DELETION);
+                           
+##########################################################################
+
+###split homo/heter variants
+#!/usr/bin/perl
+
+open TXT, "<$ARGV[0]" or die "Couldn't open it $!.";
+my @PREFIX=split(/\./,$ARGV[0]);
+my $Homo_FILE=$PREFIX[0]."_Homo.txt";
+open HOMO,">$Homo_FILE";#$ARGV[1]
+my $Heter_FILE=$PREFIX[0]."_Heter.txt";
+open HETER,">$Heter_FILE";#$ARGV[2]
+my @INFO;
+my $Num=0;
+my $HOMO_NUM=0;
+my $HETER_NUM=0;
+while(<TXT>){
+        chomp;
+        if($_=~m/^\"Chr/){
+                print HOMO "$_\n";
+                print HETER "$_\n";
+                next;
+        }
+        else{
+                @INFO=split("\t",$_);
+                #$INFO[2]=~s/ //g;
+                $Num+=1;
+                #if($Num<20){print "$INFO[7]\n";}
+                if($_=~m/Homozygous/){
+                        $HOMO_NUM+=1;
+                        print HOMO "$_\n";
+                }
+                else{
+                        $HETER_NUM+=1;
+                        print HETER "$_\n";
+                }
+        }
+
+}
+print "Homo: $HOMO_NUM\n";
+print "Heter: $HETER_NUM\n";
+print "Total Variants: $Num\n";
+close(TXT);
+close(HOMO);
+close(HETER);
+
+#################################################################################
+
+###VCF Intra/Inter samples compare batch-precision
+
+$file1="$ARGV[0]";
+$file2="$ARGV[1]";
+$file3="$ARGV[2]";
+#$out="$ARGC[4]"
+&Venn($file1,$file2,$file3);
+
+sub Venn{
+        my $f1=$_[0];
+        my $f2=$_[1];
+        my $f3=$_[2];
+        #my $out=$_[3];
+        my %hash=();
+
+        open(DATA1,$f1);
+        open(FILE1,">list1");
+        while(<DATA1>){
+                chomp;
+                if(/^#/){
+                }else{
+                        @line=split(/\t/,$_);
+                        $index="$line[0]\|$line[1]\|$line[2]\|$line[3]\|$line[4]";
+                        $hash{$index}=1;
+                        print FILE1 "$index\n";
+                }
+        }
+        close(DATA1);
+        close(FILE1);
+
+        open(DATA2,$f2);
+        open(FILE2,">list2");
+        while(<DATA2>){
+                chomp;
+                if(/^#/){
+                }else{
+                        @line=split(/\t/,$_);
+                        $index="$line[0]\|$line[1]\|$line[2]\|$line[3]\|$line[4]";
+                        if(exists $hash{$index}){
+                                $hash{$index}++;
+                        }else{
+                                $hash{$index}=1;
+                        }
+                }
+                print FILE2 "$index\n";
+        }
+        close(DATA2);
+        close(FILE2);
+
+        open(DATA3,$f3);
+        open(FILE3,">list3");
+        while(<DATA3>){
+                chomp;
+                if(/^#/){
+                }else{
+                        @line=split(/\t/,$_);
+                        $index="$line[0]\|$line[1]\|$line[2]\|$line[3]\|$line[4]";
+                        if(exists $hash{$index}){
+                                $hash{$index}++;
+                        }else{
+                                $hash{$index}=1;
+                        }
+                }
+                print FILE3 "$index\n";
+        }
+        close(DATA3);
+        close(FILE3);
+
+        open(INT,">inter.txt");
+        open(UNI,">union.txt");
+        foreach(keys %hash){
+                print UNI "$_\n";
+                if($hash{$_} == 3){
+                        print INT "$_\n";
+                }
+        }
+        close(INT);
+        close(UNI);
+
+        open(FILE,">Venn.R");
+        print FILE "d1=read.table(\"list1\")\n";
+        print FILE "d2=read.table(\"list2\")\n";
+        print FILE "d3=read.table(\"list3\")\n";
+
+        print FILE "library(VennDiagram)\n";
+
+        print FILE "venn.diagram(list(\'$file1\'=d1\$V1,\'$file2\'=d2\$V1,\'$file3\'=d3\$V1),alpha=c(0.5,0.5,0.5),fill=c(\"red\",\"yellow\",\"blue\"),cat.fontface=4,fontfamily=3,imagetype=\"png\",filename=\"Venn.png\")\n";
+
+        close(FILE);
+
+        `R < Venn.R --vanilla`;
+#       `rm list*`;
+#       `rm *.log`;
+}
+                                                  
+##Statistics Insertion/Deletion length bp
+#!/usr/bin/perl
+
+open VCF, "<$ARGV[0]" or die "Couldn't open it $!.";
+my @PREFIX=split(/\./,$ARGV[0]);
+my $OUT_FILE=$PREFIX[0]."_Length.txt";
+open OUT,">$OUT_FILE";
+my @INFO;
+my $REF_Length;
+my $ALT_Length;
+my $Length_DIFF;
+while(<VCF>){
+        chomp;
+        if($_=~m/^##/){
+                next;
+        }
+        elsif($_=~m/^#CHR/){
+                my @TEMP=split("\t",$_);
+                print OUT "$TEMP[0]\t$TEMP[1]\t$TEMP[3]\t$TEMP[4]\tLENGTH\n";
+        }
+        else{
+                @INFO=split("\t",$_);
+                $REF_Length=length($INFO[3]);
+                my @TEMP=split(",",$INFO[4]);
+                my $LAST=@TEMP;
+                $LAST=$LAST-1;
+                $ALT_Length=length($TEMP[$LAST]);
+                $Length_DIFF=abs($ALT_Length-$REF_Length);
+                print OUT "$INFO[0]\t$INFO[1]\t$INFO[3]\t$INFO[4]\t$Length_DIFF\n";
+        }
+
+}
+close(VCF);
+close(OUT);
+##########################################################################################
+
+##Statistics 1-30bp Insertion/Deletion length variants batch-precison
+$file1="$ARGV[0]";
+$file2="$ARGV[1]";
+$file3="$ARGV[2]";
+#$out="$ARGC[4]"
+foreach $base (1..30){
+        &Venn($file1,$file2,$file3,$base);
+}
+sub Venn{
+        my $f1=$_[0];
+        my $f2=$_[1];
+        my $f3=$_[2];
+        my $out=$_[3];
+        my %hash=();
+
+        open(DATA1,$f1);
+        open(FILE1,">$out.list1");
+        while(<DATA1>){
+                chomp;
+                if(/^#/){
+                }else{
+                        @line=split(/\t/,$_);
+                        if($line[4]==$out){
+                                $index="$line[0]\|$line[1]\|$line[2]\|$line[3]";
+                                $hash{$index}=1;
+                                print FILE1 "$index\n";
+                        }
+                }
+        }
+        close(DATA1);
+        close(FILE1);
+
+        open(DATA2,$f2);
+        open(FILE2,">$out.list2");
+        while(<DATA2>){
+                chomp;
+                if(/^#/){
+                }else{
+                        @line=split(/\t/,$_);
+                        if($line[4]==$out){
+                                $index="$line[0]\|$line[1]\|$line[2]\|$line[3]";
+                                if(exists $hash{$index}){
+                                        $hash{$index}++;
+                                }else{
+                                        $hash{$index}=1;
+                                }
+                                print FILE2 "$index\n";
+                        }
+                }
+                #print FILE2 "$index\n";
+        }
+        close(DATA2);
+        close(FILE2);
+
+        open(DATA3,$f3);
+        open(FILE3,">$out.list3");
+        while(<DATA3>){
+                chomp;
+                if(/^#/){
+                }else{
+                        @line=split(/\t/,$_);
+                        if($line[4]==$out){
+                                $index="$line[0]\|$line[1]\|$line[2]\|$line[3]";
+                                if(exists $hash{$index}){
+                                        $hash{$index}++;
+                                }else{
+                                        $hash{$index}=1;
+                                }
+                                print FILE3 "$index\n";
+                        }
+                }
+                #print FILE3 "$index\n";
+        }
+        close(DATA3);
+        close(FILE3);
+
+        open(INT,">$out.inter.txt");
+        open(UNI,">$out.union.txt");
+        foreach(keys %hash){
+                print UNI "$_\n";
+                if($hash{$_} == 3){
+                        print INT "$_\n";
+                }
+        }
+        close(INT);
+        close(UNI);
+
+        open(FILE,">$out.Venn.R");
+        print FILE "d1=read.table(\"$out.list1\")\n";
+        print FILE "d2=read.table(\"$out.list2\")\n";
+        print FILE "d3=read.table(\"$out.list3\")\n";
+
+        print FILE "library(VennDiagram)\n";
+
+        print FILE "venn.diagram(list(\'$file1\'=d1\$V1,\'$file2\'=d2\$V1,\'$file3\'=d3\$V1),alpha=c(0.5,0.5,0.5),fill=c(\"red\",\"yellow\",\"blue\"),cat.fontface=4,fontfamily=3,imagetype=\"png\",filename=\"$out.Venn.png\")\n";
+
+        close(FILE);
+
+        `R < $out.Venn.R --vanilla`;
+#       `rm list*`;
+#       `rm *.log`;
+}
+######################################################################################
+
+##perl script for bwa/gatk bam files
+#!/usr/bin/perl
+#
+
+$in_R1=$ARGV[0];
+$in_R2=$ARGV[1];
+$out=$ARGV[2];
+$thread=8;
+
+die if $#ARGV <= 0;
+
+#my @FASTQ=(`ls $FASTQ_PATH | grep ".*\.fastq\.gz"`);
+#foreach my $var (keys %SAMPLES_NAME){
+#$in_R1=`ls $FASTQ_PATH | grep $var | grep "_1\.fastq"`;
+#$in_R1=~s/[\n\r]//g;
+#$in_R2=`ls $FASTQ_PATH | grep $var | grep "_2\.fastq"`;
+#$in_R2=~s/[\n\r]//g;
+
+#$in_R1=$ARGV[0];
+#$in_R2=$ARGV[1];
+#$out=$ARGV[2];
+#$thread=8;
+
+#die if $#ARGV == 1;
+@SUFFIX=split("\/",$in_R1);
+@TMP=split("\/",$in_R2);
+$num=@SUFFIX-1;
+$in_R1_name=$SUFFIX[$num];
+$in_R2_name=$TMP[$num];
+@line=split(/\.fastq/,$in_R1_name);
+@Name_Info=split("_",$line[0]);
+$sample=$Name_Info[0];
+#print "$sample\n";
+if(!-e "$out"){
+        `mkdir -p $out`;
+}
+
+&TRIM;
+&MAP;
+&BQSR;
+
+`rm $out/BAM/$sample.sam`;
+`rm $out/BAM/$sample.bam`;
+`rm $out/BAM/$sample.sort.bam*`;
+#`rm $out/BAM/$sample.markdup.bam*`;
+#`bash /home/wx_clc/pipeline/scripts/Run_Vardict.sh $out/BAM/$sample.bqsr.bam /home/wx_clc/pipeline/NA12878/NA12878.bqsr.bam $sample 'NA12878'`
+
+sub TRIM{
+        if(!-e "$out/TRIM"){
+                `mkdir -p $out/TRIM`;
+        }
+        if(!-e "$out/QC"){
+                `mkdir -p $out/QC`;
+        }
+        `nohup fastp -w $thread -i $in_R1 -o $out/TRIM/trimmed_$in_R1_name -I $in_R2 -O $out/TRIM/trimmed_$in_R2_name -j $out/QC/$sample.json -h $out/QC/$sample.html`;
+}
+
+sub MAP{
+        if(!-e "$out/BAM"){
+                `mkdir -p $out/BAM`;
+        }
+`nohup bwa mem -t $thread -R \'\@RG\\tID:WXDX\\tSM:$sample\\tLB:lib\\tPL:BGI\' /cold_data/pipeline/lib/hg19/hs37d5.fa $out/TRIM/trimmed_$in_R1_name $out/TRIM/trimmed_$in_R2_name > $out/BAM/$sample.sam`;
+        `nohup samtools view -bS $out/BAM/$sample.sam -o $out/BAM/$sample.bam -@ $thread`;
+        `nohup samtools sort -@ $thread $out/BAM/$sample.bam -o $out/BAM/$sample.sort.bam`;
+        `nohup samtools index -@ $thread $out/BAM/$sample.sort.bam $out/BAM/$sample.sort.bam.bai`;
+        `nohup java -jar /home/wx_clc/genome_tools/picard.jar MarkDuplicates I=$out/BAM/$sample.sort.bam O=$out/BAM/$sample.markdup.bam M=$out/BAM/$sample.dup.txt`;
+        `nohup samtools index -@ $thread $out/BAM/$sample.markdup.bam $out/BAM/$sample.markdup.bam.bai`;
+}
+
+
+sub BQSR{
+        `nohup gatk BaseRecalibrator \\
+                -I $out/BAM/$sample.markdup.bam \\
+                -R /cold_data/pipeline/lib/hg19/hs37d5.fa \\
+                --known-sites /cold_data/pipeline/lib/GATK/Mills_and_1000G_gold_standard.indels.b37.vcf \\
+                --known-sites /cold_data/pipeline/lib/GATK/1000G_phase1.indels.b37.vcf \\
+                --known-sites /cold_data/pipeline/lib/GATK/dbsnp_138.b37.vcf \\
+                -O $out/BAM/$sample.bqsr`;
+
+        `nohup gatk ApplyBQSR -R /cold_data/pipeline/lib/hg19/hs37d5.fa -I $out/BAM/$sample.markdup.bam --bqsr-recal-file $out/BAM/$sample.bqsr -O $out/BAM/$sample.bqsr.bam`;
+        `nohup samtools index -@ $thread $out/BAM/$sample.bqsr.bam $out/BAM/$sample.bqsr.bam.bai`;
+}
+
+#sub HAPLO{
+#       if(!-e "$out/RESULT"){
+#               `mkdir $out/RESULT`;
+#       }
+#       `nohup gatk HaplotypeCaller -R /cold_data/pipeline/lib/hg19/hs37d5.fa -I $out/BAM/$sample.bqsr.bam -O $out/RESULT/$sample.vcf -L /home/cdx/piplines/WESPipeline-master/bedfiles/IDT/IDT.ext10.bed`;
+#}
+##############################################################################################################
+
+##vardict script somatics variants
+bam2=$2
+s1=$3
+s2=$4
+out=$5
+
+Project=`echo $s1 | awk -F "-" '{print $1}'`
+SAMPLE=`echo $s1 | awk -F "-" '{print $2}'`
+echo "Project: " $Project
+echo "Sample: " $SAMPLE
+if [ $Project == "MayoWES" ];then
+        echo "Mayo WES using the /cold_data/pipeline/BED/WES_Mayo.bed "
+        echo "Vardict version 1.8.0"
+        #/home/wx_clc/genome_tools/VarDictJava-release-1.5.4/build/install/VarDict/bin/VarDict -G /cold_data/pipeline/lib/hg19/hs37d5.fa -b "$bam1|$bam2" -k 1 -q 20 -Q 20 -f 0.01 -u -m 4 -c 1 -S 2 -E 3 -th 8 /cold_data/pipeline/BED/WES_Mayo.bed | /home/wx_clc/genome_tools/VarDictJava-release-1.5.4/VarDict/testsomatic.R | /home/wx_clc/genome_tools/VarDictJava-release-1.5.4/VarDict/var2vcf_paired.pl -N "$s1|$s2" -f 0.02 > $out/$s1.vardict.vcf
+        /home/wx_clc/genome_tools/VarDictJava/build/distributions/VarDict-1.8.0/bin/VarDict -G /cold_data/pipeline/lib/hg19/hs37d5.fa -b "$bam1|$bam2" -k 1 -q 20 -Q 20 -f 0.01 -u -m 4 -c 1 -S 2 -E 3 -th 8 /cold_data/pipeline/BED/WES_Mayo.bed | /home/wx_clc/genome_tools/VarDictJava/build/distributions/VarDict-1.8.0/bin/testsomatic.R | /home/wx_clc/genome_tools/VarDictJava/build/distributions/VarDict-1.8.0/bin/VarDict/var2vcf_paired.pl -N "$s1|$s2" -f 0.02 > $out/$s1.vardict.vcf
+elif [ $Project == "KeBaiTMB" ];then
+        echo "KeBai TMB using the /cold_data/pipeline/BED/IDT.ext10.bed"
+        echo "Vardict version 1.8.0"
+        /home/wx_clc/genome_tools/VarDictJava/build/distributions/VarDict-1.8.0/bin/VarDict -G /cold_data/pipeline/lib/hg19/hs37d5.fa -b "$bam1|$bam2" -k 1 -q 20 -Q 20 -f 0.01 -u -m 4 -c 1 -S 2 -E 3 -th 8 /cold_data/pipeline/BED/IDT.ext10.bed | /home/wx_clc/genome_tools/VarDictJava/build/distributions/VarDict-1.8.0/bin/testsomatic.R | /home/wx_clc/genome_tools/VarDictJava/build/distributions/VarDict-1.8.0/bin/var2vcf_paired.pl -N "$s1|$s2" -f 0.02 > $out/$s1.vardict.vcf
+else
+        echo "Other using the /cold_data/pipeline/BED/TMB-hg19.bed"
+        echo "Vardict version 1.8.0"
+        #echo "filter fre 0.01"
+        /home/wx_clc/genome_tools/VarDictJava/build/distributions/VarDict-1.8.0/bin/VarDict -G /cold_data/pipeline/lib/hg19/hs37d5.fa -b "$bam1|$bam2" -k 1 -q 20 -Q 20 -f 0.01 -u -m 4 -c 1 -S 2 -E 3 -th 8 /cold_data/pipeline/BED/TMB-hg19.bed | /home/wx_clc/genome_tools/VarDictJava/build/distributions/VarDict-1.8.0/bin/testsomatic.R | /home/wx_clc/genome_tools/VarDictJava/build/distributions/VarDict-1.8.0/bin/var2vcf_paired.pl -N "$s1|$s2" -f 0.01 > $out/$s1.vardict.vcf
+        #/home/wx_clc/genome_tools/VarDictJava/build/distributions/VarDict-1.8.0/bin/VarDict -G /cold_data/pipeline/lib/hg19/hs37d5.fa -b "$bam1|$bam2" -k 1 -q 20 -Q 20 -f 0.01 -u -m 4 -c 1 -S 2 -E 3 -th 8 /cold_data/pipeline/BED/TMB-hg19.bed | /home/wx_clc/genome_tools/VarDictJava/build/distributions/VarDict-1.8.0/bin/testsomatic.R | /home/wx_clc/genome_tools/VarDictJava/build/distributions/VarDict-1.8.0/bin/var2vcf_paired.pl -N "$s1|$s2" -f 0.02 > $out/$s1.vardict.vcf
+fi
+
+python /cold_data/pipeline/WESPipeline-master/src/somatic/vardict_msi2.py $out/$s1.vardict.vcf > $out/$s1.vardict.msi.vcf
+python /cold_data/pipeline/WESPipeline-master/src/somatic/vcfaddtag.py -i $out/$s1.vardict.msi.vcf -d /cold_data/pipeline/lib/hg19/CosmicCodingMuts.vcf.gz -t CNT > $out/$s1.vardict.tag.vcf
+python /cold_data/pipeline/WESPipeline-master/src/somatic/vcfilter.py mutectv1 $out/$s1.vardict.tag.vcf $out/$s1.vardict.filter.vcf
+perl /cold_data/pipeline/scripts/get.pl $out/$s1.vardict.filter.vcf > $out/$s1.vardict.noSV.vcf
+
+#env_sys=$PATH;
+
+#export PATH=/home/cdx/miniconda3/envs/vcf2maf93/bin:$PATH
+
+#rm $out/$s1.vardict.noSV.vep.vcf
+#rm $out/$s1.raw.maf
+
+perl /home/wx_clc/anaconda3/envs/vcf2maf/bin/vcf2maf.pl --ref-fasta /cold_data/pipeline/lib/hg19/hs37d5.fa \
+--input-vcf $out/$s1.vardict.noSV.vcf \
+--output-maf $out/$s1.raw.maf \
+--any-allele --vep-path /home/wx_clc/anaconda3/envs/vcf2maf/bin \
+--vep-data /cold_data/pipeline/lib/vep_cache \
+--filter-vcf /cold_data/pipeline/lib/VEPDB/ExAC_nonTCGA.r0.3.1.sites.vep.vcf.gz \
+--custom-enst /home/wx_clc/genome_tools/vcf2maf-1.6.16/data/isoform_overrides_uniprot_from_biomart_91 \
+--retain-info AF,MSI,MSILEN,SSF,MSI2,ALD,SN,NM,MQ,PMEAN,SBF,CNT \
+--tumor-id $s1 --normal-id $s2 \
+--vcf-tumor-id $s1 --vcf-normal-id $s2 \
+--ncbi-build GRCh37
+
+#export PATH=$env_sys
+
+sed -i '1d' $out/$s1.raw.maf
+python /cold_data/pipeline/WESPipeline-master/src/somatic/maftag.py $out/$s1.raw.maf > $out/$s1.tag.maf
+perl /cold_data/pipeline/scripts/mafilter.pl $out/$s1.tag.maf > $out/$s1.filter.maf
+####################################################################################
+
+##SV delly software
+SORTED_BAM_FILE=$1
+#HG19=$2
+#PREFIX=`echo $SORTED_BAM_FILE | sed "s/(.*)\.sorted\.bam$/\1/g"`
+PREFIX=$2
+DEL_VCF=$PREFIX"_delly_v0.6.3_DEL.vcf"
+INV_VCF=$PREFIX"_delly_v0.6.3_INV.vcf"
+DUP_VCF=$PREFIX"_delly_v0.6.3_DUP.vcf"
+TRA_VCF=$PREFIX"_delly_v0.6.3_TRA.vcf"
+DEL_LOG_FILE=$PREFIX"_delly_v0.6.3_DEL.log"
+INV_LOG_FILE=$PREFIX"_delly_v0.6.3_INV.log"
+DUP_LOG_FILE=$PREFIX"_delly_v0.6.3_DUP.log"
+TRA_LOG_FILE=$PREFIX"_delly_v0.6.3_TRA.log"
+
+nohup /home/cdx/genome_tools/delly_v0.6.3_linux_x86_64bit -x hg19.excl -t DEL -o $DEL_VCF -g hg19.fa $SORTED_BAM_FILE > $DEL_LOG_FILE 2>&1 &
+nohup /home/cdx/genome_tools/delly_v0.6.3_linux_x86_64bit -x hg19.excl -t INV -o $INV_VCF -g hg19.fa $SORTED_BAM_FILE > $INV_LOG_FILE 2>&1 &
+nohup /home/cdx/genome_tools/delly_v0.6.3_linux_x86_64bit -x hg19.excl -t DUP -o $DUP_VCF -g hg19.fa $SORTED_BAM_FILE > $DUP_LOG_FILE 2>&1 &
+nohup /home/cdx/genome_tools/delly_v0.6.3_linux_x86_64bit -x hg19.excl -t TRA -o $TRA_VCF -g hg19.fa $SORTED_BAM_FILE > $TRA_LOG_FILE 2>&1 &
+echo "delly v0.6.3 called 4 SVTYPE had finished."
+#######################################################################
+
+
+
+
+
