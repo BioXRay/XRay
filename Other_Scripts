@@ -1,0 +1,1005 @@
+#!/usr/bin/env python
+
+"""
+get diplotype sequence from vcf and reference
+"""
+
+import sys
+import itertools
+import subprocess
+from functools import reduce
+from loguru import logger
+
+def check_vcf_phasing(vcf):
+    logger.info(f'checking phasing information in {vcf}')
+    phasing = 1
+    hetero = 0
+    no_hp_lines = []
+    with open(vcf) as o_f:
+        for line in o_f:
+            if line[0] == '#':
+                continue
+            else:
+                format1, format2 = line.split()[-2:]
+                gt = format2.split(':')[0]
+                if '/' in gt:
+                    gt1, gt2 = gt.split('/')
+                else:
+                    gt1, gt2 = gt.split('|')
+                if gt1 != gt2:
+                    hetero += 1
+                if 'HP' in format1 or 'PS' in format1:
+                    continue
+                else:
+                    if gt1 == gt2:
+                        continue
+                    else:
+                        no_hp_lines.append(line)
+                        phasing = 0
+                
+    if hetero > 1 and len(no_hp_lines) > 0:
+        for line in no_hp_lines:
+            logger.warning(f'no phasing information in {line}')
+    else:
+        logger.info(f'phasing info is ok')
+
+    return phasing
+
+
+def modify_vcf_gt(vcf1, vcf2):
+    logger.info(f'modify gt in {vcf1} for whatshap')
+    with open(vcf1) as o_f, open(vcf2, 'w') as w_f:
+        for line in o_f:
+            line = line.strip()
+            if line[0] == '#':
+                print(line, file=w_f)
+            else:
+                words = line.split()
+                chrom, pos, vid, ref, alt, qual, filterr, info, format1, format2 = words
+                f_words_1 = format1.split(':')
+                f_words_2 = format2.split(':')
+                gt = f_words_2[0]
+                if '/' in gt:
+                    gt1, gt2 = gt.split('/')
+                else:
+                    gt1, gt2 = gt.split('|')
+                gt1, gt2 = int(gt1), int(gt2)
+                if gt1 < 2 and gt2 < 2:
+                    print(line, file=w_f)
+                else:
+                    logger.warning(f'modify {line}')
+                    alts = alt.split(',')
+                    ref = alts[0]
+                    alt = ','.join(alts[1:])
+                    gt1, gt2 = gt1-1, gt2-1
+                    if '/' in gt:
+                        new_format2 = [f'{gt1}/{gt2}'] + f_words_2[1:]
+                    else:
+                        new_format2 = [f'{gt1}|{gt2}'] + f_words_2[1:]
+                    new_words = [chrom, pos, vid, ref, alt, qual, filterr, info, format1, ':'.join(new_format2)]
+                    new_line = '\t'.join(new_words)
+                    print(new_line, file=w_f)
+
+
+
+def get_vcf(sample, bam, chrom, start, end, vcf):
+
+    region = f'{chrom}_{start}_{end}'
+
+    bed = f'{sample}_{region}.bed'
+    with open(bed, 'w') as w_f:
+        print(chrom, start, end, sep='\t', file=w_f)
+
+    vcf1 = f'{sample}_{region}.sanger.vcf'
+    command1 = f"""
+    /home/li_tuan/anaconda3/envs/bioinfo/bin/bcftools  view \
+        -t {chrom}:{start}-{end} \
+            {vcf} > {vcf1}
+    """
+
+    logger.info(f'run freebayes on {region}')
+    r1 = subprocess.run(command1, universal_newlines=True, capture_output=True, shell=True)
+    assert r1.returncode == 0
+
+    vcf2 = f'{sample}_{region}.sanger.modify_gt.vcf'
+    modify_vcf_gt(vcf1, vcf2)
+
+    vcf3 = f'{sample}_{region}.sanger.modify_gt.whatshap.vcf'
+    command3 = f"""
+    /home/li_tuan/.local/bin/whatshap phase -o {vcf3} --ignore-read-groups --tag=HP --indels --internal-downsampling=23 \
+        --reference=/hot_data/refer_genome/human_genome/b37_less_CEUtrio_data/human_g1k_v37.fasta \
+            {vcf2} {bam}
+    """
+    logger.info(f'run whatshap on {region}')
+    r3 = subprocess.run(command3, universal_newlines=True, capture_output=True, shell=True)
+    logger.info(r3.stderr)
+    assert r3.returncode == 0
+
+    phasing = check_vcf_phasing(vcf3)
+
+    return vcf3
+
+
+
+
+def get_reference(chrom, start, end):
+
+    region = f'{chrom}:{start}-{end}'
+    logger.info(f'get sequence for {region}')
+
+    command = f'samtools faidx /hot_data/refer_genome/human_genome/b37_less_CEUtrio_data/human_g1k_v37.fasta {region}'
+    r = subprocess.run(command, universal_newlines=True, capture_output=True, shell=True)
+    sequence = ''.join([line.strip() for line in r.stdout.split('\n')[1:]])
+    logger.info(f'sequence for {region} is \n {sequence}')
+    return [chrom, start, end, sequence]
+
+
+def get_segments_from_vcf(vcf):
+    logger.info(f'get segments from {vcf}')
+    segments = []
+    possible_haps = []
+    with open(vcf) as o_f:
+        for line in o_f:
+            if line[0] == '#':
+                continue
+            else:
+                chrom, pos, _, ref, alt, _, _, _, format1, format2 = line.strip().split()
+                f_words_1 = format1.split(':')
+                f_words_2 = format2.split(':')
+                if 'HP' in f_words_1:
+                    hp_i = f_words_1.index('HP')
+                    hp1, hp2 = f_words_2[hp_i].split(',')
+                    possible_haps.append(hp1)
+                    possible_haps.append(hp2)
+
+    possible_haps = list(set(possible_haps))
+    logger.info(f'haplotype labels are {possible_haps}')
+
+    with open(vcf) as o_f:
+        for line in o_f:
+            if line[0] == '#':
+                continue
+            else:
+                chrom, pos, _, ref, alt, _, _, _, format1, format2 = line.strip().split()
+                f_words_1 = format1.split(':')
+                f_words_2 = format2.split(':')
+                assert 'GT' in f_words_1
+                gt_i = f_words_1.index('GT')
+                if '.' in f_words_2[gt_i]:
+                    continue
+                gt1, gt2 = f_words_2[gt_i].split('/')
+                gt1, gt2 = int(gt1), int(gt2)
+                start = pos
+                end = int(pos) + len(ref) - 1
+                alts = [ref] + alt.split(',')
+                sequences = [alts[gt1], alts[gt2]]
+                if 'HP' in f_words_1:
+                    hp_i = f_words_1.index('HP')
+                    hp1, hp2 = f_words_2[hp_i].split(',')
+                    hap = [hp1, hp2]
+                    segments.append([chrom, int(start), int(end), sequences, hap])
+                else:
+                    if gt1 == gt2:
+                        sequences = [alts[gt1]]
+                        segments.append([chrom, int(start), int(end), sequences, []])
+                    else:
+                        segments.append([chrom, int(start), int(end), sequences, []])
+
+                    continue
+
+    logger.info(f'there are {len(segments)} segments')
+    return segments, list(set(possible_haps))
+
+
+def get_segments(chrom, start, end, segments, possible_haps):
+    target_region = f'{chrom}:{start}-{end}'
+    logger.info(f'get segments for {target_region}')
+
+    start, end = int(start), int(end)
+    overlapped_segments = []
+
+    for chrom_seg, start_seg, end_seg, sequences_seg, hap_seg in segments:
+        seg_region = f'{chrom_seg}:{start_seg}-{end_seg}'
+        logger.info(f'check {seg_region}')
+        if end_seg <= start:
+            continue
+        elif start_seg >= end:
+            break
+        # start, end [3, 4, 5]
+        # seg [1, 4]
+        # sequence 3-1:5-3+1
+        elif start_seg <= start and end_seg >= start and end_seg <= end:
+            overlap_start = start
+            overlap_end = end_seg
+            sequence_start = start - start_seg
+            overlap_sequences = [s[sequence_start:] for s in sequences_seg]
+            overlapped_segments.append([chrom, overlap_start, overlap_end, overlap_sequences, hap_seg])
+            logger.info(f"segment {seg_region} overlap left of {target_region}")
+        # start, end [3, 4, 5]
+        # seg [3, 5]
+        # sequence 0:5-3+1
+        elif start_seg >= start and end_seg <= end:
+            overlap_start = start_seg
+            overlap_end = end_seg
+            overlap_sequences = sequences_seg
+            overlapped_segments.append([chrom, overlap_start, overlap_end, overlap_sequences, hap_seg])
+            logger.info(f"segment {seg_region} is in {target_region}")
+        # start, end [3, 4, 5]
+        # seg [4, 7]
+        # sequence 0:5-4+1
+        elif start_seg >= start and start_seg <= end and end_seg >= end:
+            overlap_start = start_seg
+            overlap_end = end
+            sequence_start = 0
+            sequence_end = end - start_seg + 1
+            overlap_sequences = [s[sequence_start:sequence_end] for s in sequences_seg]
+            overlapped_segments.append([chrom, overlap_start, overlap_end, overlap_sequences, hap_seg])
+            logger.info(f"segment {seg_region} overlap right of {target_region}")
+        # start, end [3, 4, 5]
+        # seg [1, 7]
+        # sequence 3-1:5-1+1
+        elif start_seg <= start and end_seg >= end:
+            overlap_start = start
+            overlap_end = end
+            sequence_start = start - start_seg
+            sequence_end = end - start_seg + 1
+            overlap_sequences = [s[sequence_start: sequence_end] for s in sequences_seg]
+            overlapped_segments.append([chrom, overlap_start, overlap_end, overlap_sequences, hap_seg])
+            logger.info(f"segment {seg_region} overlap full {target_region}")
+
+    logger.info(f'therer are {len(overlapped_segments)} overlapped segments')
+
+    # no overlap, use ref
+    if len(overlapped_segments) == 0:
+        _, _, _, sequence_ref = get_reference(chrom, start, end)
+        overlapped_segments.append( [chrom, start, end, [sequence_ref], []])
+    # one full overlap
+    elif overlapped_segments[0][1] == start and overlapped_segments[0][2] == end:
+        logger.info('good, there is one full overlap')
+    else:
+        segments = [start]
+        for segment in overlapped_segments:
+            segments.append(segment[1])
+            segments.append(segment[2])
+        segments.append(end)
+        logger.info(f'segment locations are {segments}')
+
+        for i in range(len(segments)-1):
+            s_start = segments[i]
+            s_end = segments[i+1]
+            if i%2 == 1:
+                continue
+            elif s_start == s_end:
+                continue
+            else:
+                if i == 0:
+                    _, _, _, sequence_ref = get_reference(chrom, s_start, s_end-1)
+                    overlapped_segments.append( [chrom, s_start, s_end-1, [sequence_ref], []])
+                elif i == end:
+                    _, _, _, sequence_ref = get_reference(chrom, s_start+1, s_end)
+                    overlapped_segments.append( [chrom, s_start+1, s_end, [sequence_ref], []])
+                else:
+                    _, _, _, sequence_ref = get_reference(chrom, s_start+1, s_end-1)
+                    overlapped_segments.append( [chrom, s_start+1, s_end-1, [sequence_ref], []])
+
+    return chrom, start, end, sorted(overlapped_segments)
+
+
+def assemble_segments(chrom, start, end, vcf):
+
+    chrom, start, end = chrom, int(start), int(end)
+    segments, possible_haps = get_segments_from_vcf(vcf)
+    logger.info(f'possible_haps are {possible_haps}')
+    chrom, start, end, segments = get_segments(chrom, start, end, segments, possible_haps)
+    for chrom, start, end, seqs, haps in segments:
+        logger.info(f'{chrom}\t{start}\t{end}\t{seqs}\t{haps}')
+    
+    hap_seqs = []
+    if len(possible_haps) == 0:
+        hap_segments = []
+        for chrom, start, end, seqs, haps in segments:
+            hap_segments.append(seqs)
+        m = reduce(lambda x,y: x*y, list(map(len, hap_segments)))
+        if m > 1:
+            logger.warning(f'there are {m} possible sequences')
+        else:
+            logger.info(f'there are {m} possible sequences')
+
+        index_list = list(itertools.product(*[list(range(len(seqs))) for seqs in hap_segments]))
+        for seq_index in index_list:
+            s = ''.join([ hap_segments[si][sii] for si, sii in enumerate(seq_index) ])
+            hap_seqs.append(s)
+    else:
+        hap_seqs = []
+        for hap in possible_haps:
+            hap_segments = []
+            for chrom, start, end, seqs, haps in segments:
+                if len(haps) == 0:
+                    hap_segments.append(seqs)
+                else:
+                    if hap in haps:
+                        hap_i = haps.index(hap)
+                        hap_segments.append([seqs[hap_i]]) 
+                    else:
+                        hap_segments.append(seqs)
+
+            m = reduce(lambda x,y: x*y, list(map(len, hap_segments)))
+            if m > 1:
+                logger.warning(f'there are {m} possible sequences for {hap}')
+            else:
+                logger.info(f'there are {m} possible sequences for {hap}')
+
+            index_list = list(itertools.product(*[list(range(len(seqs))) for seqs in hap_segments]))
+            for seq_index in index_list:
+                s = ''.join([ hap_segments[si][sii] for si, sii in enumerate(seq_index) ])
+                hap_seqs.append(s)
+
+    return chrom, start, end, hap_seqs
+
+
+def get_hap_seqs(sample, bam, chrom, start, end, vcf):
+    vcf1 = get_vcf(sample, bam, chrom, start, end, vcf)
+    _, _, _, hap_seqs = assemble_segments(chrom, start, end, vcf1)
+
+    print(hap_seqs)
+    print(len(hap_seqs))
+    print(len(list(set(hap_seqs))))
+    with open(f'{sample}_{chrom}_{start}_{end}.haps.fasta', 'w') as w_f:
+        for seqi, seq in enumerate(list(set(hap_seqs))):
+            logger.info(f'write hap{seqi} {seq}')
+            print(f'>hap{seqi}', file=w_f)
+            print(seq, file=w_f)
+
+    return hap_seqs
+
+
+def main():
+
+#   chrom, start, end = 6,	31322281	,31322411
+#   bam = 'HG01872.HLA.bam'
+#   sample = 'HG01872'
+#   vcf = 'TMB-HG01872-1.Dup50reads.fastq.sorted.bam.bcftools.vcf'
+#   hap_seqs = get_hap_seqs(sample, bam, chrom, start, end, vcf)
+
+#   sys.exit(0)
+
+
+    bam = sys.argv[-3]
+    vcf = sys.argv[-2]
+    bed = sys.argv[-1]
+
+    intervals = []
+    with open(bed) as o_f:
+        for line in o_f:
+            chrom, start, end = line.strip().split()[:3]
+            intervals.append([chrom, start, end])
+
+    for chrom, start, end in intervals:
+        sample = bam.split('/')[-1].split('.')[0]
+        get_hap_seqs(sample, bam, chrom, start, end, vcf)
+
+
+
+main()
+
+#############################################################################
+#!/usr/bin/env python
+
+import sys
+from pathlib import Path
+
+
+#for sample in ['HG01872', 'HG02461', 'NA05518']:
+for sample in ['HG01872', ]:
+    with open(f'{sample}.fastq', 'w') as w_f:
+        for f in Path('.').glob(f'{sample}*haps.fasta'):
+            print(f.stem)
+            fq_name = '.'.join(f.stem.split('.')[:-1])
+            with open(f) as o_f:
+                for li, line in enumerate(o_f):
+                    if line[0] == '>':
+                        print(line)
+                        continue
+                    else:
+                        print(line)
+                        for j in range(30):
+                            print(f'@{fq_name}_{li}_{j}', file=w_f)
+                            print(line, file=w_f, end='')
+                            print('+', file=w_f)
+                            print('F'*len(line.strip()), file=w_f)
+#################################################################################
+
+#!/usr/bin/env python
+
+import sys
+vcf1 = sys.argv[-2]
+vcf2 = sys.argv[-1]
+
+with open(vcf1) as o_f, open(vcf2, 'w') as w_f:
+    for line in o_f:
+        if line[0] == '#':
+            print(line, file=w_f, end='')
+        else:
+            words = line.strip().split()
+            f_words_1 = words[-2].split(':')
+            f_words_2 = words[-1].split(':')
+            new_f_words_1 = f_words_1[1:]
+            new_f_words_2 = f_words_2[1:]
+            new_words = words[:-2] + [':'.join(new_f_words_1), ':'.join(new_f_words_2)]
+            print('\t'.join(new_words), file=w_f)
+######################################################################################
+
+#!/bin/bash
+
+set -ue
+
+
+#for sample in 'HG01872' 'HG02461' 'NA05518'
+for sample in 'HG02461'
+do
+
+/home/li_tuan/anaconda3/envs/freebayes/bin/freebayes -f /hot_data/refer_genome/human_genome/b37_less_CEUtrio_data/human_g1k_v37.fasta \
+    $sample.HLA.bam \
+    --haplotype-length 1 \
+    -r 6:31324110-31324231 \
+    > ${sample}.freebayes.vcf
+
+
+
+#java -jar /cold_data/li_tuan/xiong_ke/sarek/purecn/GenomeAnalysisTK-3.8-1-0-gf15c1c3ef/GenomeAnalysisTK.jar \
+#    -T HaplotypeCaller \
+#    -R /hot_data/refer_genome/human_genome/b37_less_CEUtrio_data/human_g1k_v37.fasta \
+#    -I $sample.HLA.bam  \
+#    -o  $sample.haplotype.vcf \
+#    -bamout $sample.haplotype.bam \
+#    -bamWriterType CALLED_HAPLOTYPES \
+#    -L hla.bed \
+#
+done
+####################################################################################
+#!/bin/bash
+
+set -ue
+
+
+#for sample in 'HG01872' 'HG02461' 'NA05518'
+for sample in 'HG01872'
+do
+
+platypus callVariants --refFile=/hot_data/refer_genome/human_genome/b37_less_CEUtrio_data/human_g1k_v37.fasta \
+    --bamFile=$sample.HLA.bam \
+    --regions=6:31322281-31322411 \
+    --assemble=1 \
+    --maxVariants=20 \
+    --HLATyping=1 \
+    --output=${sample}.platypus.vcf
+
+
+
+#java -jar /cold_data/li_tuan/xiong_ke/sarek/purecn/GenomeAnalysisTK-3.8-1-0-gf15c1c3ef/GenomeAnalysisTK.jar \
+#    -T HaplotypeCaller \
+#    -R /hot_data/refer_genome/human_genome/b37_less_CEUtrio_data/human_g1k_v37.fasta \
+#    -I $sample.HLA.bam  \
+#    -o  $sample.haplotype.vcf \
+#    -bamout $sample.haplotype.bam \
+#    -bamWriterType CALLED_HAPLOTYPES \
+#    -L hla.bed \
+#
+done
+####################################################################################
+#!/usr/bin/env python
+
+import sys
+from pathlib import Path
+
+
+for sample in ['HG01872', 'HG02461', 'NA05518']:
+    with open(f'{sample}.fastq', 'w') as w_f:
+        for f in Path('.').glob(f'{sample}*haps.fasta'):
+            print(f.stem)
+            fq_name = '.'.join(f.stem.split('.')[:-1])
+            with open(f) as o_f:
+                for li, line in enumerate(o_f):
+                    if line[0] == '>':
+                        print(line)
+                        continue
+                    else:
+                        print(line)
+                        for j in range(30):
+                            print(f'@{fq_name}_{li}_{j}', file=w_f)
+                            print(line, file=w_f, end='')
+                            print('+', file=w_f)
+                            print('F'*len(line.strip()), file=w_f)
+####################################################################################
+#vep.py
+#!/usr/bin/env python
+
+import os
+import sys
+import re
+import subprocess
+import uuid
+import gzip
+import pandas as pd
+import numpy as np
+import logging
+logger = logging.getLogger('vep')
+
+from pathlib import Path
+from argparse import ArgumentParser
+
+parser = ArgumentParser(description="use vep to annotate vcf")
+
+parser.add_argument('--vep_bin', dest='vep_bin', action='store', required=True, help='path to vep binary directory')
+parser.add_argument('--vep_cache', dest='vep_cache', action='store', required=True, help='path to vep cache directory')
+parser.add_argument('--vep_plugin', dest='vep_plugin', action='store', required=True, help='path to vep plugin directory')
+parser.add_argument('--ref', dest='ref', action='store', required=True, help='path to human reference(fasta)')
+parser.add_argument('--assembly', dest='assembly', action='store', default='GRCh37', choices=['GRCh38', 'GRCh37'], required=False, help='human reference assembly, GRCh37 or GRCh38')
+parser.add_argument('--dbnsfp', dest='dbnsfp', action='store', required=True, help='path to dbnsfp directory')
+parser.add_argument('--dbscsnv', dest='dbscsnv', action='store', required=True, help='path to dbscSNV file')
+parser.add_argument('--clinvar', dest='clinvar', action='store',required=True, help='path to clinvar vcf')
+parser.add_argument('--cosmic', dest='cosmic', action='store', required=True, help='path to cosmic vcf')
+parser.add_argument('--gene_transcript', dest='gene_transcript', action='store', required=True, help='path to gene primary transcript')
+
+parser.add_argument('--python', dest='python', action='store', required=True, help='path to python(for intervar)')
+parser.add_argument('--intervar', dest='intervar', action='store', required=True, help='path to intervar')
+parser.add_argument('--intervar_config', dest='intervar_config', action='store', required=True, help='path to intervar config')
+
+parser.add_argument('--perl', dest='perl', action='store', required=True, help='path to perl(for convert2annovar)')
+parser.add_argument('--convert2annovar', dest='convert2annovar', action='store', required=True, help='path to convert2annovar')
+
+parser.add_argument('--threads', dest='threads', action='store', type=int, default=8, help='vep threads')
+parser.add_argument('--vcf', dest='vcf', action='store', required=True, help='path to input vcf')
+parser.add_argument('--out', dest='out', action='store', required=True, help='path to output tsv file')
+
+args = parser.parse_args()
+print(args)
+
+def convert_vcf_to_tsv(vcf):
+
+    logger.info('convert vcf to tsv')
+    tmp_tsv = 'tmp' + str(uuid.uuid4()) + '.tsv'
+
+    ldfs = []
+    with open(vcf) as o_f :
+        samples = []
+        for line in o_f:
+            if line[:2] == '##':
+                continue
+            elif line[:6] == '#CHROM':
+                columns = line.rstrip('\n').split('\t')
+                if len(columns) == 8:
+                    samples = ['sample']
+                elif len(columns) == 9:
+                    samples = ['sample'] 
+                elif len(columns) >= 10:
+                    samples = columns[9:]
+            else:
+                words = line.rstrip('\n').split('\t')
+                info = '.'
+                fformat ='.'
+                fformat_v = '.'
+                if len(words) == 8:
+                    info = words[7]
+                    fformat = '.'
+                elif len(words) >= 10:
+                    info = words[7]
+                    fformat = words[8]
+                    fformat_v = words[9:]
+
+                if info == '.':
+                    info_columns = ['info']
+                    info_values = ['.']
+                else:
+                    info_columns = []
+                    info_values = []
+                    for i in info.split(';'):
+                        ii = i.split("=")
+                        info_columns.append('INFO_'+ii[0])
+                        info_values.append('='.join(ii[1:]))
+                
+                if fformat == '.':
+                    format_columns = ['format']
+                    format_values = ['.']
+                else:
+                    format_columns = []
+                    format_values = []
+                    if len(samples) == 1:
+                        format_columns += ['FORMAT_' + i for i in fformat.split(':')]
+                        format_values += fformat_v[0].split(':')
+                    else:
+                        for fi, fv in enumerate(fformat_v):
+                            format_columns += [ 'sample_' + str(fi+1) + '_FORMAT_' + i for i in fformat.split(':')]
+                            format_values += fv.split(':')
+
+
+                print(info_columns)
+                print(format_columns)
+                ldf = pd.DataFrame([words[:7] + info_values + format_values], columns=columns[:7] + info_columns + format_columns)
+                ldfs.append(ldf)
+    df = pd.concat(ldfs, sort=False)
+
+    df.to_csv(tmp_tsv, sep='\t', index=False, encoding='utf-8')
+
+    logger.info('convert vcf to tsv successfully')
+    return tmp_tsv
+
+
+def add_vid(vcf):
+
+    print(vcf)
+    logger.info(f'add vid to vcf {vcf}')
+    tmp_vcf = str('tmp' + str(uuid.uuid4()) + '.vcf')
+    print(tmp_vcf)
+    try:
+        with open(tmp_vcf, 'w') as w_f, open(vcf) as o_f:
+            i = 100000
+            for line in o_f:
+                if line[0] == '#':
+                    print(line, file=w_f, end='')
+                else:
+                    words = line.split('\t')
+                    if words[2] == '.':
+                        new_line = '\t'.join(words[:2] + [str(i)] + words[3:])
+                    else:
+                        new_line = line
+                    print(new_line, file=w_f, end='')
+                    i += 1
+    except Exception as e:
+        print(e)
+        with open(tmp_vcf, 'w') as w_f, gzip.open(vcf, 'rt') as o_f:
+            i = 0
+            for line in o_f:
+                if line[0] == '#':
+                    print(line, file=w_f, end='')
+                else:
+                    words = line.split('\t')
+                    new_line = '\t'.join(words[:2] + [str(i)] + words[3:])
+                    print(new_line, file=w_f, end='')
+                    i += 1
+
+    logger.info('add vid to vcf succesfully')
+    return tmp_vcf
+
+
+def run_vep(vcf):
+
+    logger.info('run vep')
+    tmp_vep_tsv = str('tmp' + str(uuid.uuid4()) + '.vep.tsv')
+
+    dbnspf_columns = ','.join([
+        'Ensembl_geneid',
+        'Ensembl_transcriptid',
+        'Ensembl_proteinid',
+        'FATHMM_pred',
+        'Interpro_domain',
+        'SIFT4G_pred',
+        'PROVEAN_pred',
+        'Polyphen2_HVAR_pred',
+        'LRT_pred',
+        'MutationAssessor_pred',
+        'MutationTaster_pred',
+        'fathmm-MKL_coding_pred',
+        'MetaLR_pred',
+        'MetaSVM_pred',
+        'Polyphen2_HVAR_pred',
+        'M-CAP_pred',
+        'REVEL_score',
+        '1000Gp3_EAS_AF',
+        '1000Gp3_AF',
+        'ESP6500_AA_AF',
+        'ExAC_AF',
+        'ExAC_EAS_AF',
+        'gnomAD_exomes_controls_AF',
+        'gnomAD_exomes_controls_AFR_AF',
+        'gnomAD_exomes_controls_AMR_AF',
+        'gnomAD_exomes_controls_ASJ_AF',
+        'gnomAD_exomes_controls_EAS_AF',
+        'gnomAD_exomes_controls_FIN_AF',
+        'gnomAD_exomes_controls_NFE_AF',
+    ])
+
+    subprocess.run(f"""
+    export PATH={args.vep_bin}:$PATH; \
+    {args.vep_bin}/vep \
+        --cache \
+        --dir_cache {args.vep_cache} \
+        --fasta {args.ref} \
+        --assembly {args.assembly} \
+        --merged \
+        --offline \
+        --everything \
+        --custom {args.clinvar},Clinvar,vcf,exact,0,CLNSIG,CLNREVSTAT,CLNDN \
+        --custom {args.cosmic},COSMIC,vcf,exact,0,CNT,LEGACY_ID \
+        --dir_plugins {args.vep_plugin} \
+        --plugin dbNSFP,{args.dbnsfp},{dbnspf_columns} \
+        --plugin dbscSNV,{args.dbscsnv} \
+        --format vcf \
+        --shift_3prime 1 \
+        -i {vcf} \
+        --tab \
+        -o {tmp_vep_tsv} \
+        --force_overwrite \
+        --fork {args.threads} \
+        --no_stats \
+        --no_escape
+    """, shell=True)
+
+    logger.info('run vep successfully')
+    return tmp_vep_tsv
+
+
+def run_intervar(vcf):
+    logger.info('run interval')
+
+    vcf_name = Path(vcf).stem
+    out_dir = str(Path(args.out).parent)
+    out_file = out_dir + '/' + vcf_name
+
+    tmp_config = str('tmp' + str(uuid.uuid4()) + '.config.ini')
+    with open(args.intervar_config) as o_f, open(tmp_config, 'w') as w_f:
+        for line in o_f:
+            if line.startswith('inputfile ='):
+                print(f'inputfile = {vcf}', file=w_f)
+            elif line.startswith('outfile = '):
+                print(f"outfile = {out_file}", file=w_f)
+            else:
+                print(line, file=w_f, end='')
+
+    subprocess.run(
+        f"""
+        {args.python} {args.intervar} -c {tmp_config} 
+        """, shell=True
+    )
+
+    tmp_avinput = 'tmp' + str(uuid.uuid4()) + '.avinput'
+    subprocess.run(
+        f"""
+        {args.perl} {args.convert2annovar} --format vcf4 --includeinfo {vcf} > {tmp_avinput}
+        """, shell=True
+    )
+
+    adf = pd.read_csv(tmp_avinput, sep='\t', header=None, dtype=str)
+    adf = adf[[0,1,2,3,4,7]]
+    adf.columns = ['#Chr', 'Start', 'End', 'Ref', 'Alt', 'ID']
+
+    files = [str(f.resolve()) for f in Path(out_dir).glob('*.intervar')]
+    files = sorted(files, key=lambda f: os.stat(f).st_mtime)
+    vdf = pd.read_csv(files[0], sep='\t', dtype=str)
+    mdf = pd.merge(vdf, adf, on=['#Chr', 'Start', 'End', 'Ref', 'Alt'])
+    #mdf.to_csv('interval.tsv', sep='\t', index=False)
+    
+    logger.info('run interval successfully')
+    return mdf[['ID', ' InterVar: InterVar and Evidence ']].rename(columns={' InterVar: InterVar and Evidence ':'intervar'})
+
+def main():
+
+    # check if vcf is empty:
+    empty = 1
+    with open(args.vcf) as o_f:
+        for line in o_f:
+            if line[0] == '#':
+                continue
+            else:
+                words = line.strip().split('\t')
+                if len(words) >= 8:
+                    empty = 0
+    if empty:
+        Path(args.out).touch()
+        sys.exit(0)
+
+    vcf1 = add_vid(args.vcf)
+    tsv1 = convert_vcf_to_tsv(vcf1)
+    tsv2 = run_vep(vcf1)
+
+    df1 = pd.read_csv(tsv1, sep='\t', dtype=str)
+
+    keep_columns = ['#CHROM', 'POS', 'ID', 'REF', 'ALT', 'QUAL', 'FILTER'] 
+    for c in df1.columns.tolist():
+        if  'INFO_' in c and 'DP' in c:
+            keep_columns.append(c)
+        if  'INFO_' in c and 'AF' in c:
+            keep_columns.append(c)
+        if  'FORMAT_' in c and 'DP' in c:
+            keep_columns.append(c)
+        #if  'FORMAT_' in c and 'AD' in c:
+        #    keep_columns.append(c)
+        if  'FORMAT_' in c and 'FREQ' in c:
+            keep_columns.append(c)
+        if  'FORMAT_' in c and 'AF' in c:
+            keep_columns.append(c)
+        if  'FORMAT_' in c and 'GT' in c:
+            keep_columns.append(c)
+        if  'FORMAT_' in c and 'CLCAD2' in c:
+            keep_columns.append(c)
+    keep_columns = [ c for c in keep_columns if not 'sample_2_' in c]
+    #print(keep_columns)
+    keep_columns = list(set(keep_columns))
+    df1 = df1[keep_columns]
+    keep_columns = [c if not 'sample_1_' in c else c[9:] for c in keep_columns]
+    df1.columns = keep_columns
+
+    df1['FORMAT_AD'] = df1['FORMAT_CLCAD2'].apply(lambda x: int(x.split(',')[1].strip()) if isinstance(x, str) and ',' in x else 0)
+    #df1['FORMAT_AD'] = df1['FORMAT_AD'].apply(lambda x: float(x.split(',')[1]) if x != '-' and x != '.' else 0)
+    df1['FORMAT_DP'] = df1['FORMAT_DP'].apply(lambda x: int(x) if x != '-' and x != '.' else 1)
+    #df1['allele_frequency'] = df1['FORMAT_FREQ'].apply(lambda x: float(x[:-1])/100 if x != '-' and x != '.' else 0)
+    #df1['allele_frequency'] = df1['INFO_AF']
+    df1['allele_frequency'] = df1['FORMAT_AD'] / df1['FORMAT_DP']
+    df1['allele_frequency'] = df1['allele_frequency'].apply(lambda x: '{0:.2%}'.format(float(x)))
+    #print(df1['FORMAT_FREQ'])
+    #df1['allele_frequency'] = df1['FORMAT_FREQ']
+
+    comment_lines = 0
+    with open(tsv2) as o_f:
+        for line in o_f:
+            if line[:2] == '##':
+                comment_lines += 1
+            else:
+                break
+    df2 = pd.read_csv(tsv2, sep='\t', dtype=str, skiprows=comment_lines)
+    drop_columns = [
+        'FLAGS',
+        'TSL',
+        'APPRIS',
+        'CCDS',
+        'SWISSPROT',
+        'TREMBL',
+        'UNIPARC',
+        'REFSEQ_MATCH',
+        'SOURCE',
+        'GIVEN_REF',
+        'USED_REF',
+        'BAM_EDIT',
+        'SIFT',
+        'PolyPhen',
+        'miRNA',
+        'AF',
+        'PHENO',
+        'MOTIF_NAME',
+        'MOTIF_POS',
+        'HIGH_INF_POS',
+        'MOTIF_SCORE_CHANGE',
+        'DOMAINS',
+        'SYMBOL_SOURCE',
+        'MANE',
+        'GENE_PHENO',
+        'HGVS_OFFSET',
+        'DISTANCE',
+        'AFR_AF',
+        'AMR_AF',
+        'EUR_AF',
+        'SAS_AF',
+        'EA_AF',
+        'gnomAD_AFR_AF',
+        'gnomAD_AMR_AF',
+        'gnomAD_ASJ_AF',
+        'gnomAD_FIN_AF',
+        'gnomAD_NFE_AF',
+        'gnomAD_OTH_AF',
+        'gnomAD_SAS_AF',
+        'cDNA_position',
+        'CDS_position',
+        'Protein_position',
+        'Amino_acids',
+        'Feature_type',
+        'Codons',
+        'Gene',
+    ]
+
+    df2 = df2.drop(columns=drop_columns)
+    df2['HGVSp'] = df2['HGVSp'].apply(lambda x: x.split(':')[1] if ':' in x else x)
+    df2['EXON'] = df2['EXON'].apply(lambda x: x.replace('/', '\/'))
+    df2['INTRON'] = df2['INTRON'].apply(lambda x: x.replace('/', '\/'))
+
+    mdf = pd.merge(df1, df2, left_on='ID', right_on='#Uploaded_variation')
+    mdf = mdf.drop(columns=['#Uploaded_variation'])
+
+    gdf = pd.read_csv(args.gene_transcript, sep='\t')
+    primary_transcript = gdf[gdf['primary'] == 'Y']['nm'].tolist()
+
+    c = mdf['Feature'].str.contains('XM_')
+    mdf = mdf[~c].copy()
+
+    mdf['nm'] = [s.split('.')[0] if s[:2] == 'NM' else s for s in mdf['Feature']]
+    mdf['nm'] = mdf['nm'].astype(str)
+    mdf['score_1'] = np.where(mdf['nm'].isin(primary_transcript), 10, 0)
+    mdf['score_2'] = np.where(mdf['nm'].str.contains('NM_'), 10, 0)
+    mdf['score_3'] = np.where(mdf['CANONICAL'] != '-', 10, 0)
+    mdf = mdf.sort_values(by=['score_1', 'score_2', 'score_3'], ascending=False)
+
+    mdf = mdf.drop(columns=['nm','score_1', 'score_2', 'score_3'])
+    #mdf.to_csv('mdf.tsv', index=False)
+
+    def concat_rows(df):
+        row = df.iloc[0,:].tolist()
+        if len(df) >= 2:
+            hgvsc = ';'.join(df.iloc[1:,:]['HGVSc'].tolist())
+            hgvsp = ';'.join(df.iloc[1:,:]['HGVSp'].tolist())
+            pi = df.columns.tolist().index('HGVSp')
+            new_values = row[:pi+1] + [hgvsc, hgvsp] + row[pi+1:]
+        else:
+            pi = df.columns.tolist().index('HGVSp')
+            new_values = row[:pi+1] + ['-', '-'] + row[pi+1:]
+        return new_values
+
+    m_columns = mdf.columns.tolist()
+    pi = m_columns.index('HGVSp')
+    new_columns = m_columns[:pi+1] + ['HGVSc_other', 'HGVSp_other'] + m_columns[pi+1:]
+
+    nr = mdf.groupby('ID').apply(concat_rows)
+    ndf = pd.DataFrame(nr.tolist(), columns=new_columns)
+
+    ndf = ndf.rename(columns={'Feature':'primary_transcript', 'Gene':'entrez', '#CHROM':'CHROM'})
+    #ndf.to_csv('ndf1.xls', index=False, sep='\t')
+
+    for c in ndf.columns.tolist():
+        if '_AF' in c:
+            pass
+            #ndf[c] = ndf[c].apply(lambda x: float(x) if x != '-' and x.isnumeric() else 0)
+            #ndf = ndf[ndf[c] < 0.05]
+            #ndf[c] = ndf[c].apply(lambda x: x if x > 0 else '-')
+
+    n_columns = ndf.columns.tolist()
+    i1 = n_columns.index('Consequence')
+    i2 = n_columns.index('HGVSc')
+    i3 = n_columns.index('HGVSp')
+    i4 = n_columns.index('HGVSc_other')
+    i5 = n_columns.index('HGVSp_other')
+    nn_columns = n_columns[:i1+1] + ['HGVSc', 'HGVSp', 'HGVSc_other', 'HGVSp_other'] + n_columns[i1+1:i2] + n_columns[i2+1:i3] + n_columns[i3+1:i4] + n_columns[i4+1:i5] + n_columns[i5+1:]
+    ndf = ndf[nn_columns]
+
+    idf = run_intervar(vcf1)
+    #idf.to_csv('intervar1.tsv', index=False, sep='\t')
+
+    ndf = pd.merge(ndf, idf, on='ID', how='left')
+
+
+    def translate_hgvsp(hgvsp):
+        ad = {'Cys': 'C', 'Asp': 'D', 'Ser': 'S', 'Gln': 'Q', 'Lys': 'K',
+        'Ile': 'I', 'Pro': 'P', 'Thr': 'T', 'Phe': 'F', 'Asn': 'N', 
+        'Gly': 'G', 'His': 'H', 'Leu': 'L', 'Arg': 'R', 'Trp': 'W', 
+        'Ala': 'A', 'Val':'V', 'Glu': 'E', 'Tyr': 'Y', 'Met': 'M', 'X':'*', 'Ter':'*'}
+
+        for k,v in ad.items():
+            hgvsp = re.sub(k, v, hgvsp)
+
+        if 'p.' in hgvsp:
+            return hgvsp[2:]
+        else:
+            return hgvsp   
+
+    ndf['hgvsp'] = ndf['HGVSp'].apply(translate_hgvsp)
+
+    nn_columns = ndf.columns.tolist()
+    columns = [
+    'CHROM', 'POS', 'REF', 'ALT', 'SYMBOL', 'Location', 'Allele', 'allele_frequency', 'FORMAT_DP', 'FORMAT_AD','primary_transcript', 'HGVSc', 'HGVSp', 'hgvsp', 'Consequence', 'VARIANT_CLASS', 'EXON', 'INTRON',
+    'Existing_variation', 'IMPACT', 'Clinvar_CLNSIG', 'COSMIC', 'COSMIC_CNT', 'COSMIC_LEGACY_ID', 'ada_score', 'rf_score', 'intervar', 'FORMAT_GT', 'HGVSc_other', 'HGVSp_other', 'PUBMED',
+    'EAS_AF', 'AA_AF', 'gnomAD_AF', 'gnomAD_EAS_AF', 'MAX_AF', 'MAX_AF_POPS', '1000Gp3_AF', '1000Gp3_EAS_AF', 'ESP6500_AA_AF', 'ExAC_AF', 'ExAC_EAS_AF',
+    'Interpro_domain',  'FATHMM_pred', 'LRT_pred', 'M-CAP_pred', 'MetaLR_pred', 'MetaSVM_pred', 'MutationAssessor_pred',
+    'MutationTaster_pred', 'PROVEAN_pred', 'Polyphen2_HVAR_pred', 'REVEL_score', 'SIFT4G_pred', 'fathmm-MKL_coding_pred',
+    'QUAL', 'STRAND',
+    'Clinvar','Clinvar_CLNREVSTAT', 'clinvar_CLNDN', 'Ensembl_geneid', 'Ensembl_proteinid', 'Ensembl_transcriptid',
+    ]
+
+    primary_columns = [c for c in columns if c in nn_columns]
+    rest_columns = [c for c in nn_columns if not c in columns]
+
+    ndf = ndf[primary_columns + rest_columns]
+    ndf['HGVSc'] = ndf['HGVSc'].apply(lambda x: x.split(':')[1] if isinstance(x, str) and ':' in x else x)
+
+
+    ndf.to_csv(args.out, sep='\t', index=False)
+    logger.info(f'write output {args.out}')
+
+    #Path(vcf1).unlink()
+    #Path(tsv1).unlink()
+    #Path(tsv2).unlink()
+
+
+
+if __name__ == "__main__":
+    main()
+##############################################################################################################
+
+
+
