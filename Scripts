@@ -395,3 +395,31 @@ foreach(@sample){
 #############################################################################################################
 ##http://resources.qiagenbioinformatics.com/manuals/clcserver/current/admin/index.php?manual=Command_line_tools.html(CLC analysis tool)###
 Dynamic Risk Profiling Using Serial Tumor Biomarkers for Personalized Outcome Prediction
+
+
+
+###################################
+rm
+#!/usr/bin/env python
+
+from pathlib import Path
+from datetime import datetime
+from dateutil.parser import *
+import subprocess
+
+p = Path('/data/monkey_genewiz/wdl_wgs/cromwell-executions/macfas_GATK4_WGS_VariantDiscovery_pipeline')
+p = Path('/data/macfas_data/wdl_wgs/cromwell-executions/macfas_GATK4_WGS_VariantDiscovery_pipeline')
+
+dirs = [g for g in p.glob('*') if g.is_dir()]
+
+end_date = parse('2019 11 25 2:00')
+dirs = [ d for d in dirs if datetime.fromtimestamp(d.stat().st_mtime) < end_date]
+
+for d in dirs:
+    try:    
+        print(d, datetime.fromtimestamp(d.stat().st_mtime))
+        print(f'rm -rf {str(d.resolve())}')
+        subprocess.run(f'rm -rf {str(d.resolve())}', shell=True)
+    except Exception as e:
+        print(e)
+        pass
