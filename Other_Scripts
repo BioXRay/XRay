@@ -511,6 +511,28 @@ for sample in ['HG01872', 'HG02461', 'NA05518']:
                             print('+', file=w_f)
                             print('F'*len(line.strip()), file=w_f)
 ####################################################################################
+#config.yaml
+conda_bin: /xx/anaconda3/bin
+bin: /xx/hc_annotation/bin
+workflow_dir: /xx/hc_annotation
+Rscript: /xx/anaconda3/envs/r_officer/bin/Rscript
+vt: /xx/anaconda3/envs/bioinfo/bin/vt
+vep_python: /xx/anaconda3/bin/python
+vep_bin: /xx/anaconda3/envs/vep100/bin
+vep_data: /xx/vep_data/cache_100
+vep_plugin: /xx/vep_data/VEP_plugins
+vep_ref: /xx/data/hs37d5.fa
+dbnsfp: /xx/vep_data/dbNSFP4.0a/dbNSFP_hg19.gz
+dbscsnv: /xx/vep_data/dbscSNV/dbscSNV1.1_GRCh37.txt.gz
+clinvar: /xx/vep_data/clinvar37/clinvar.vcf.gz
+cosmic:  /xx/vep_data/cosmic37/cosmic.vcf.gz
+gene_transcript: /xx/lung_report/data/gene_primary_transcript_table.tsv
+intervar_python: /usr/bin/python
+intervar: /xx/interpretation/InterVar-master/Intervar.py
+intervar_config: /xx/config.ini
+intervar_perl: /usr/bin/perl
+convert2annovar: /xx/interpretation/InterVar-master/convert2annovar.pl
+####################################################################################
 #vep.py
 #!/usr/bin/env python
 
