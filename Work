@@ -3086,3 +3086,64 @@ perl /GPFS01/softwares/vcf2maf-1.6.16/vcf2maf.pl --input-vcf Results/DC198N0158-
 python /GPFS01/bitbucket/wuy/GSWES/src/somatic/maftag.py Results/DC198N0158-G1A6F19XKF1-H003S96S/TMP/vardict/DC198N0158-G1A6F19XKF1-H003S96S.raw.maf 0.01 15 4 10 70 8 0.1 25 20 10 3 50 20 > Results/DC198N0158-G1A6F19XKF1-H003S96S/vardict/raw/DC198N0158-G1A6F19XKF1-H003S96S.tag.maf
 ####################
 
+#Barcode_Checking_Base_Balance.py
+#SampleName	index_id	index sequence
+#TMB-NEC1902-11	83	TGTGAACTTG
+#TMB-NEC1902-10	84	GAGAGGTGCT
+#TMB-NEC1902-9	85	TGCACTGTAA
+#TMB-NEC1902-8	86	GCCTAGGCAA
+#TMB-NEC1902-7	87	CCATCATAGC
+#TMB-NEC1902-6	88	CATGGTAATT
+#TMB-NEC1902-5	89	CACCATGTCT
+#TMB-LAC1901-1	90	ATATGTCTGG
+#TMB-LAC1901-2	91	AAGGAAGCGT
+#TMB-LAC1901-3	92	TCAAGACGTC
+
+#!/usr/bin/env python2
+import os
+import re
+import pandas as pd
+import numpy as np
+import argparse
+
+parser=argparse.ArgumentParser(description="MGI barcode checking base balance in python2 environment.")
+parser.add_argument("--barcodeinfo",type=str,default=None,help="barcode sample information file")
+args=parser.parse_args()
+Barcode_File=args.barcodeinfo
+with open(Barcode_File,'r') as F:
+    SEQ_ARRAY=[]
+    for line in F.readlines():
+        if(re.match(r"^Sample",line)):
+            continue
+        else:
+                INFO=line.strip().split("\t")
+                barcode_info=list(INFO[2])
+                #print(barcode_info)
+                SEQ_ARRAY.append(barcode_info)
+    #print(SEQ_ARRAY)
+    df=pd.DataFrame(SEQ_ARRAY)
+    print(pd.DataFrame(SEQ_ARRAY))
+
+    Records={"A":[],"C":[],"G":[],"T":[]}
+    for index,row in df.iteritems():
+        #print(len(row))
+        A_tmp=(row=='A').to_list()
+        C_tmp=(row=='C').to_list()
+        G_tmp=(row=='G').to_list()
+        T_tmp=(row=='T').to_list()
+        #print(A_tmp,np.sum(A_tmp),len(A_tmp))
+        A_percent=np.sum(A_tmp)*1.0/len(A_tmp)
+        C_percent=np.sum(C_tmp)*1.0/len(C_tmp)
+        G_percent=np.sum(G_tmp)*1.0/len(G_tmp)
+        T_percent=np.sum(T_tmp)*1.0/len(T_tmp)
+        #print("A: %s; C: %s; G: %s; T: %s" %(A_percent,C_percent,G_percent,T_percent))
+        Records['A'].append(A_percent)
+        Records['C'].append(C_percent)
+        Records['G'].append(G_percent)
+        Records['T'].append(T_percent)
+    print("A percent: %s" % Records['A'])
+    print("C percent: %s" % Records['C'])
+    print("G percent: %s" % Records['G'])
+    print("T percent: %s" % Records['T'])
+#############################################
+
