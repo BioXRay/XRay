@@ -1,0 +1,2967 @@
+#!/usr/bin/python
+# -*- coding:UTF-8 -*-
+
+from reportlab.pdfgen import canvas
+from reportlab.lib.units import inch,cm
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.cidfonts import UnicodeCIDFont
+pdfmetrics.registerFont(UnicodeCIDFont('STSong-Light'))
+from reportlab.lib.styles import getSampleStyleSheet,ParagraphStyle
+from reportlab.platypus import BaseDocTemplate,Frame,PageTemplate,Paragraph,Spacer,Table,LongTable,TableStyle,tableofcontents,PageBreak,Image
+
+from reportlab.lib import colors
+
+from reportlab.pdfbase.ttfonts import TTFont
+import time
+import copy
+from reportlab.rl_config import defaultPageSize
+PAGE_HEIGHT=defaultPageSize[1];PAGE_WIDTH=defaultPageSize[0]
+from reportlab.lib import fonts
+pdfmetrics.registerFont(TTFont('song','/home/cdx/XieLab/SIMSUN.ttf'))
+pdfmetrics.registerFont(TTFont('SONGBOLD','/home/cdx/XieLab/Song_Bold.ttf'))
+pdfmetrics.registerFont(TTFont('TIMESBOLD','/home/cdx/XieLab/Time_Roman_Bold.ttf'))
+
+from reportlab.lib.enums import TA_JUSTIFY
+import string
+import re
+import pickle
+import os
+
+#页面大小默认A4大小，宽21cm,高29.7cm
+#UnicodeCIDFont该库包含STSong-Light这个Font，可以引入
+
+stylesheet=getSampleStyleSheet()
+Style_N=copy.deepcopy(stylesheet['Normal']) #Normal,Title,Heading1等等
+Style_N.leading=16
+Style_N.fontName='song'
+Style_T=copy.deepcopy(stylesheet['Normal'])
+Style_T.textColor="blue"
+Style_T.fontName='TIMESBOLD'
+Style_T.fontSize=15
+Style_SubT=copy.deepcopy(stylesheet['Title'])
+Style_SubT.leading=7
+
+styleH1=copy.deepcopy(stylesheet['Heading1'])
+styleH1.fontName='SONGBOLD'
+styleH1.leading=20
+styleH1.fontSize=10.5
+styleH2=copy.deepcopy(stylesheet['Heading2'])
+styleH2.fontName='SONGBOLD'
+styleH2.leading=18
+styleH2.fontSize=12.5
+styleH3=copy.deepcopy(stylesheet['Heading3'])
+styleH3.fontName='SONGBOLD'
+styleH3.leading=16
+styleH3.fontSize=10.5
+
+#自定义添加样式
+stylesheet.add(ParagraphStyle(name='body',
+							fontName='song',
+							fontSize=10.5,
+							textColor='black',
+							leading=15, 
+							#spaceBefore=0, #段前间距
+							#spaceAfter=10, #段后间距
+							leftIndent=0,
+							rightIndent=0,
+							firstLineIndent=20, #缩进
+							alignment=TA_JUSTIFY, #对齐方式
+						)
+			)
+style_body=stylesheet['body']
+
+#ParagraphStyle包含许多通用格式化需求
+'''alignment=0
+allowOrphans=0
+allowWidows=1
+backColor=None
+borderColor=None
+borderPadding=0
+borderRadius=None
+borderWidth=0
+'''
+
+story=[]
+"""
+import sys
+##Sample Informations
+Sample_Info=sys.argv[1]
+Line_No=0
+with open(Sample_Info,'r') as F:
+	for line in F.readlines():
+			Line_No+=1
+			if(Line_No>1):
+				TMP=line.strip().split("\t")
+				print(TMP[2],TMP[4],TMP[5],TMP[6],TMP[7])
+"""
+def Footer(canvas,doc):
+	"""
+	设置页脚---param canvas:Canvas类型 pdf画布
+				param	doc：doc类型 整个pdf文件
+	"""
+#	canvas.saveState() #保存当前画布状态
+	#pageNumber=("第%s页" % canvas.getPageNumber()) #获取当前的页码
+	#Para=Paragraph("<font face='song' size=10>第</font><font face='Times-Roman' size=10>%s</font><font face='song' size=10>页</font>" % canvas.getPageNumber(),Style_N)
+	#w,h=Para.wrap(1*cm,1*cm) #申请一块1cm大小的空间，返回值是实际使用的空间
+	#Para.drawOn(canvas,foot_coordinate_x,foot_coordinate_y)
+	#Para.drawOn(canvas,PAGE_WIDTH/2,0.2*cm)  #将页码放在指定的坐标处
+#	canvas.restoreState()
+	
+def Header(canvas,doc):
+	"""
+	设置页眉
+	param canvas:Canvas类型 pdf画布
+	param doc:doc类型 整个pdf文件
+	"""
+	"""
+	canvas.saveState()
+	
+	canvas.setFont("SONGBOLD",18)
+	#canvas.setFillColorRGB(0,0,0)#39,107,170
+	canvas.setFillColor("#276BAA")
+	canvas.drawCentredString(PAGE_WIDTH/2.0,PAGE_HEIGHT-70,"心血管疾病精准用药赋能包解读报告")
+	#Para_EN=Paragraph("<font size=15 face='TIMESBOLD'>Cardiovascular Disease Drug Gene Test Interpretation</font>",Style_T)
+	canvas.setFont("TIMESBOLD",18)
+	#canvas.setFillColorRGB(0,191,255)
+	canvas.drawCentredString(PAGE_WIDTH/2.0,PAGE_HEIGHT-90,"Cardiovascular Disease Drug Gene Test Interpretation")
+	#Para_Hos=Paragraph("<font size=8 face='song'>送检医院/Hospital:</font>",Style_N)
+	canvas.setFillColorRGB(0,0,0)
+	canvas.setFont("song",9)
+	canvas.drawString(PAGE_WIDTH/10.0+13,PAGE_HEIGHT-110,"送检医院/Hospital:  内蒙古星屹健康管理服务有限公司")
+	#Para_Bar=Paragraph("<font size=8 face='song'>预置条码/Barcode:</font>")
+	canvas.setFont('song',9)
+	canvas.drawString(PAGE_WIDTH*0.6,PAGE_HEIGHT-110,"预置条码/Barcode:  A00007809")
+	#canvas.line(doc.leftMargin,PAGE_HEIGHT-113,doc.leftMargin+doc.width,PAGE_HEIGHT-113) #画一条横线
+	canvas.setFont('song',9)
+	canvas.drawString(PAGE_WIDTH/10.0+13,PAGE_HEIGHT-122,"姓名:  王琛")
+	canvas.drawString((PAGE_WIDTH/10.0+10)*3.5,PAGE_HEIGHT-122,"性别:  男")
+	canvas.drawString((PAGE_WIDTH/10.0+10)*6,PAGE_HEIGHT-122,"年龄: 49岁")
+	#canvas.drawString((PAGE_WIDTH/10.0+10)*6,PAGE_HEIGHT-122,"样本编号:")
+	canvas.setFont('Times-Roman',9)
+	canvas.drawString(PAGE_WIDTH/10.0+13,PAGE_HEIGHT-132,"Name")
+	canvas.drawString((PAGE_WIDTH/10.0+10)*3.5,PAGE_HEIGHT-132,"Gender")
+	canvas.drawString((PAGE_WIDTH/10.0+10)*6,PAGE_HEIGHT-132,"Age")
+	#canvas.drawString((PAGE_WIDTH/10.0+10)*6,PAGE_HEIGHT-132,"Sample ID")
+	#canvas.line(doc.leftMargin,PAGE_HEIGHT-136,doc.leftMargin+doc.width,PAGE_HEIGHT-136) #画一条横线
+	
+	canvas.restoreState()
+	"""
+doc=BaseDocTemplate("PGx_qXXG200401002.pdf",topMargin=2*cm) #声明一个文档模板类
+#声明一块Frame,存放页码
+frame_footer=Frame(doc.leftMargin,doc.bottomMargin,doc.width,doc.height,id='normal')
+#设置页面模板，在加载页面时先运行Header()函数，在加载完页面后运行Footer()函数
+template=PageTemplate(id='test',frames=[frame_footer],onPage=Header,onPageEnd=Footer)
+doc.addPageTemplates([template])
+print("cm:%s\ntopMargin:%s\nLeftMargin:%s\nRightMargin:%s\nBottomMargin:%s\n" %(cm,doc.topMargin,doc.leftMargin,doc.rightMargin,doc.bottomMargin))
+current_date=time.strftime("%Y-%m-%d",time.localtime())
+
+def Text_Deal(text):
+	TEXT_EN=re.sub(r"([a-zA-Z0-9@:*()., ]+)","<font face='Times-Roman'>\g<1></font>",text)#英文处理字体
+	#TEXT_CN=re.sub(r"([\u4e00-\u9fa5]+)","<font face='song'>\g<1></font>",TEXT_EN) #中文处理字体
+	#TEXT_FINAL=re.sub(r"([\u3002\uff1b\uff0c\uff1a\u201c\u201d\uff08\uff09\u3001\uff1f\u300a\u300b])","<font face='song'>\\1</font>",TEXT_CN)
+	return(TEXT_EN)
+
+def Drug_Discription_One(story,DATA,styleH3,style_body):
+	story.append(Paragraph("<p><font face='TIMESBOLD'>1) </font><font face='SONGBOLD'>药物类别 </font><font face='TIMESBOLD'>CATEGORY</font></p>",styleH3))
+	story.append(Paragraph("%s" % DATA['CATEGORY'],style_body))
+	story.append(Paragraph("<p><font face='TIMESBOLD'>2) </font><font face='SONGBOLD'>临床应用 </font><font face='TIMESBOLD'>CLINICAL USAGE</font></p>",styleH3))
+	story.append(Paragraph("%s" % DATA['CLINICAL USAGE'],style_body))
+	story.append(Paragraph("<p><font face='TIMESBOLD'>3) </font><font face='SONGBOLD'>基因检测结果 </font><font face='TIMESBOLD'>GENE TEST RESULT</font></p>",styleH3))
+	
+
+def Drug_Discription_Two(story,DATA,styleH3,style_body):
+	story.append(Paragraph("<p><font face='TIMESBOLD'>4) </font><font face='SONGBOLD'>结果说明 </font><font face='TIMESBOLD'>RESULT DESCRIPTION</font></p>",styleH3))
+	#print(DATA['Drug'],"##",DATA['RESULT DESCRIPTION'])
+	TMP_INFO=DATA['Drug'].split(" ")
+	TMP_txt=str(DATA['RESULT DESCRIPTION'])
+	if(TMP_INFO[0]=='华法林'):
+		print("###%s" % TMP_txt)
+	if(TMP_txt=='nan'):
+		story.append(Paragraph("%s" % "N/A",style_body))
+		
+	else:
+		TMP=DATA['RESULT DESCRIPTION'].split("\n")
+		for i in range(len(TMP)):
+			if(TMP[i]!=""):
+				story.append(Paragraph("%s" % TMP[i],style_body))
+	story.append(Paragraph("<p><font face='TIMESBOLD'>5) </font><font face='SONGBOLD'>用药提示 </font><font face='TIMESBOLD'>COMMENT</font></p>",styleH3))
+	if(DATA['COMMENT']=='nan'):
+		story.append(Paragraph("%s" % "N/A",style_body))
+	else:
+		story.append(Paragraph("%s" % DATA['COMMENT'],style_body))
+	story.append(Paragraph("<p><font face='TIMESBOLD'>6) </font><font face='SONGBOLD'>相关药物相互作用提示 </font><font face='TIMESBOLD'>RELATED DRUG INTERACTIONS</font></p>",styleH3))
+	story.append(Paragraph("%s" % DATA['RELATED DRUG INTERACTIONS'],style_body))
+	story.append(Paragraph("<p><font face='TIMESBOLD'>7) </font><font face='SONGBOLD'>禁忌症提示 </font><font face='TIMESBOLD'>CONTRAINDICATIONS</font></p>",styleH3))
+	for i in range(len(DATA['CONTRAINDICATIONS'])):
+		story.append(Paragraph("%s" % Text_Deal(DATA['CONTRAINDICATIONS'][i]),style_body))
+	story.append(Paragraph("<p><font face='TIMESBOLD'>8) </font><font face='SONGBOLD'>参考文献 </font><font face='TIMESBOLD'>REFERENCE</font></p>",styleH3))
+	for i in range(len(DATA['REFERENCE'])):
+		j=i+1
+		#print(Text_Deal(DATA['REFERENCE'][i]))
+		story.append(Paragraph("%s" % Text_Deal(DATA['REFERENCE'][i]),style_body))
+
+def Drug_Title(story,DATA,Txt_No,styleH2):
+	TMP_INFO=DATA['Drug'].split(" ")
+	story.append(Paragraph("<p><font face='TIMESBOLD' color=#276BAA>%s </font><font face='SONGBOLD' color=#276BAA>%s </font><font face='TIMESBOLD' color=#276BAA>%s</font></p>" % (Txt_No,TMP_INFO[0],TMP_INFO[1]),styleH2))
+	
+def Test_Result(story,DATA,styleH3,style_body):
+	Drug_Info=DATA['Drug'].split(" ")#	if(Drug_Info[0]!="华法林"):
+	TMP_table=DATA['GENE TEST RESULT'].tolist()
+	if(len(TMP_table[0])==4):
+		table_obj=Table(TMP_table,colWidths=[PAGE_WIDTH/6,PAGE_WIDTH/6,PAGE_WIDTH/6,PAGE_WIDTH/6])
+		table_obj.setStyle(TableStyle([
+				('FONTNAME',(0,0),(-1,0),'song'),
+				('FONTSIZE',(0,0),(-1,-1),10),
+				('BACKGROUND',(0,0),(-1,0),"#A4C7F1"),
+				('FONTNAME',(0,1),(-2,-1),'Times-Roman'),
+				('FONTNAME',(-2,1),(-1,-1),'song'),
+				('ALIGN',(0,0),(-1,-1),'CENTER'),
+				('VALIGN',(0,0),(-1,-1),'MIDDLE'),
+				('GRID',(0,1),(-1,-1),0.1,colors.black),
+				('LINEABOVE',(0,0),(-1,0),0.1,colors.black)]))
+		story.append(table_obj)
+		Drug_Discription_Two(story,DATA,styleH3,style_body)
+		story.append(PageBreak())
+	elif(len(TMP_table[0])==5):
+		table_obj=Table(TMP_table,colWidths=[PAGE_WIDTH/7,PAGE_WIDTH/7,PAGE_WIDTH/7,PAGE_WIDTH/7,PAGE_WIDTH/7])
+		table_obj.setStyle(TableStyle([
+				('FONTNAME',(0,0),(-1,0),'song'),
+				('FONTSIZE',(0,0),(-1,-1),10),
+				('BACKGROUND',(0,0),(-1,0),"#A4C7F1"),
+				('FONTNAME',(0,1),(-2,-1),'Times-Roman'),
+				('FONTNAME',(-2,1),(-1,-1),'song'),
+				('ALIGN',(0,0),(-1,-1),'CENTER'),
+				('VALIGN',(0,0),(-1,-1),'MIDDLE'),
+				('LINEABOVE',(0,0),(-1,0),0.1,colors.black),
+				('GRID',(0,1),(-1,-1),0.1,colors.black),
+			]))
+		story.append(table_obj)
+		Drug_Discription_Two(story,DATA,styleH3,style_body)
+		story.append(PageBreak())
+
+	
+#添加一个空行
+#story.append(Spacer(0.1*cm,0.1*cm))
+##############First Page Content############################
+story.append(Paragraph("<p>总体用药解析</p>",styleH1))
+IMG_GreenCycle=Image("/home/cdx/XieLab/Img_GreenCycle.png")
+IMG_GreenCycle.drawWidth=14
+IMG_GreenCycle.drawHeight=14
+IMG_RedCue=Image("/home/cdx/XieLab/Img_RedCue.png")
+IMG_RedCue.drawWidth=14
+IMG_RedCue.drawHeight=14
+IMG_YellowGanTan=Image("/home/cdx/XieLab/Img_YellowGanTan.png")
+IMG_YellowGanTan.drawWidth=14
+IMG_YellowGanTan.drawHeight=14
+IMG_CycleGanTan=Image("/home/cdx/XieLab/Img_CycleGanTan.png")
+IMG_CycleGanTan.drawWidth=14
+IMG_CycleGanTan.drawHeight=14
+SUMMARY_DATA=[[IMG_GreenCycle,'正常用药','尼群地平,洛伐他汀,氟伐他汀,坎地沙坦,阿托伐他汀,卡维地洛,匹伐他汀,非洛地平,\n氯噻酮,氯沙坦,辛伐他汀,阿替洛尔,美托洛尔,瑞舒伐他汀,叶酸,普伐他汀'],
+			[IMG_RedCue,'调整用药','卡托普利,贝那普利,咪达普利,依那普利,赖诺普利,氢氯噻嗪,群多普利'],
+			[IMG_YellowGanTan,'谨慎用药','厄贝沙坦,氯吡格雷,华法林,螺内酯,氨氯地平,硝苯地平,阿司匹林,维拉帕米'],
+			[IMG_CycleGanTan,"风险提示","依那普利、贝那普利、卡托普利、群多普利、咪达普利、赖诺普利: 咳嗽风险提示\n氢氯噻嗪: 血糖升高风险提示\n氯吡格雷: 出血风险提示\n阿司匹林: 心梗风险较低"]]
+
+SUMMARY_DATA_table_obj=Table(SUMMARY_DATA,colWidths=[PAGE_WIDTH/20,(PAGE_WIDTH/20)*2.5,(PAGE_WIDTH/20)*11.5])
+SUMMARY_DATA_table_obj.setStyle(TableStyle([
+							('FONTNAME',(1,0),(-1,-1),'song'),
+							('FONTSIZE',(1,0),(-1,-1),8),
+							('ALIGN',(0,0),(0,-1),"RIGHT"),
+							('VALIGN',(0,0),(0,-1),'MIDDLE'),
+							#('VALIGN',(1,1),(1,-1),'MIDDLE'),
+							('BOX',(0,0),(-1,-1),0.1,colors.black),
+							('LINEABOVE',(0,1),(-1,1),0.1,colors.black),
+							('LINEABOVE',(0,2),(-1,2),0.1,colors.black),
+							('LINEABOVE',(0,3),(-1,3),0.1,colors.black),
+							('LINEBEFORE',(-1,0),(-1,-1),0.1,colors.black),
+]))
+story.append(SUMMARY_DATA_table_obj)
+story.append(Spacer(0.2*cm,0.2*cm))
+
+IMG_GreenUp=Image("/home/cdx/XieLab/Img_GreenUp.png")
+IMG_GreenUp.drawHeight=8
+IMG_GreenUp.drawWidth=8
+IMG_BlueUp=Image("/home/cdx/XieLab/Img_BlueUp.png")
+IMG_BlueUp.drawWidth=8
+IMG_BlueUp.drawHeight=8
+IMG_RedGanTan=Image("/home/cdx/XieLab/Img_RedGanTan.png")
+IMG_RedGanTan.drawWidth=8
+IMG_RedGanTan.drawHeight=8
+IMG_RedDown=Image("/home/cdx/XieLab/Img_RedDown.png")
+IMG_RedDown.drawWidth=8
+IMG_RedDown.drawHeight=8
+IMG_YellowDown=Image("/home/cdx/XieLab/Img_YellowDown.png")
+IMG_YellowDown.drawWidth=8
+IMG_YellowDown.drawHeight=8
+##美托洛尔（Metoprolol）;阿替洛尔（Atenolol）;卡维地洛（Carvedilol）;贝那普利（Benazepril）;依那普利 （Enalapril）;赖诺普利（Lisinopril）;咪达普利（Imidapril）
+##氯沙坦 Losartan;厄贝沙坦 Irbesartan;坎地沙坦 Candesartan;氢氯噻嗪（Hydrochlorothiazide）;螺内酯（Spironolactone）;氯噻酮（Chlorthalidone）;氨氯地平（Amlodipine）;
+##维拉帕米（Verapamil）;辛伐他汀Simvastatin;阿托伐他汀Atorvastatin;瑞舒伐他汀Rosuvastatin;氟伐他汀Fluvastatin;普伐他汀Pravastatin;匹伐他汀Pitavastatin;
+##洛伐他汀Lovastatin;华法林 Warfarin;氯吡格雷 clopidogrel;阿司匹林 aspirin;
+
+INFO_DATA=[['分类','药物名称','基因','药物响应','','','用药建议'],
+			['','','','疗效','代谢','风险',''],
+			['β-受体阻滞剂','美托洛尔','CYP2D6','',"EM",'','正常用药'],
+			['β-受体阻滞剂','阿替洛尔','CACNA1C',IMG_RedDown,'','','替换用药'],
+			['β-受体阻滞剂','卡维地洛','CYP2D6','',"EM",'','正常用药'],
+			['血管紧张素转换酶\n抑制剂（ACEI）','贝那普利','AGT',IMG_RedDown,'','','调整用药'],
+			['血管紧张素转换酶\n抑制剂（ACEI）','贝那普利','BDKRB2','','',IMG_RedGanTan,'调整用药'],
+			['血管紧张素转换酶\n抑制剂（ACEI）','贝那普利','PTGER3','','',IMG_RedGanTan,'调整用药'],
+			['血管紧张素转换酶\n抑制剂（ACEI）','依那普利','AGT',IMG_RedDown,'','','调整用药'],
+			['血管紧张素转换酶\n抑制剂（ACEI）','依那普利','BDKRB2','','',IMG_RedGanTan,'调整用药'],
+			['血管紧张素转换酶\n抑制剂（ACEI）','依那普利','PTGER3','','',IMG_RedGanTan,'调整用药'],
+			['血管紧张素转换酶\n抑制剂（ACEI）','依那普利','SLCO1B1','','','','调整用药'],
+			['血管紧张素转换酶\n抑制剂（ACEI）','赖诺普利','AGT',IMG_RedDown,'','','调整用药'],
+			['血管紧张素转换酶\n抑制剂（ACEI）','赖诺普利','BDKRB2','','',IMG_RedGanTan,'调整用药'],
+			['血管紧张素转换酶\n抑制剂（ACEI）','赖诺普利','PTGER3','','',IMG_RedGanTan,'调整用药'],
+			['血管紧张素转换酶\n抑制剂（ACEI）','咪达普利','BDKRB2','','',IMG_RedGanTan,'调整用药'],
+			['血管紧张素转换酶\n抑制剂（ACEI）','咪达普利','PTGER3','','',IMG_RedGanTan,'调整用药'],
+			['血管紧张素转换酶\n抑制剂（ACEI）','群多普利','BDKRB2','','',IMG_RedGanTan,'调整用药'],
+			['血管紧张素转换酶\n抑制剂（ACEI）','群多普利','PTGER3','','',IMG_RedGanTan,'调整用药'],
+			['血管紧张素转换酶\n抑制剂（ACEI）','卡托普利','AGT',IMG_RedDown,'','','调整用药'],
+			['血管紧张素转换酶\n抑制剂（ACEI）','卡托普利','BDKRB2','','',IMG_RedGanTan,'调整用药'],
+			['血管紧张素转换酶\n抑制剂（ACEI）','卡托普利','PTGER3','','',IMG_RedGanTan,'调整用药'],
+			['血管紧张素II受\n体拮抗剂\n（ARB）','氯沙坦','ABCB1',IMG_GreenUp,'','','正常用药'],
+			['血管紧张素II受\n体拮抗剂\n（ARB）','氯沙坦','CYP2C9','','EM','','正常用药'],
+			['血管紧张素II受\n体拮抗剂\n（ARB）','厄贝沙坦','CYP2C9','',IMG_BlueUp,'','谨慎用药'],
+			['血管紧张素II受\n体拮抗剂\n（ARB）','坎地沙坦','AGTR1',IMG_GreenUp,'','','正常用药'],
+			['利尿剂','氢氯噻嗪','KCNJ1','','',IMG_RedGanTan,'调整用药'],
+			['利尿剂','氢氯噻嗪','NEDD4L',IMG_RedDown,'','','调整用药'],
+			['利尿剂','螺内酯','ADD1',IMG_RedDown,'','','谨慎用药'],
+			['利尿剂','氯噻酮','ACE','','','','正常用药'],
+			['钙离子通道阻滞\n剂（CCB）','氨氯地平','CACNA1C',IMG_GreenUp,'','','谨慎用药'],
+			['钙离子通道阻滞\n剂（CCB）','氨氯地平','CYP3A5','',IMG_YellowDown,'','谨慎用药'],
+			['钙离子通道阻滞\n剂（CCB）','硝苯地平','CACNA1C',IMG_GreenUp,'','','谨慎用药'],
+			['钙离子通道阻滞\n剂（CCB）','硝苯地平','CYP3A5','',IMG_YellowDown,'','谨慎用药'],
+			['钙离子通道阻滞\n剂（CCB）','尼群地平','CACNA1C',IMG_GreenUp,'','','正常用药'],
+			['钙离子通道阻滞\n剂（CCB）','非洛地平','CACNA1C',IMG_GreenUp,'','','正常用药'],
+			['钙离子通道阻滞\n剂（CCB）','维拉帕米','ABCB1','',IMG_BlueUp,'','谨慎用药'],
+			['钙离子通道阻滞\n剂（CCB）','维拉帕米','CACNA1C',IMG_GreenUp,'','','谨慎用药'],
+			
+			['辅助用药','叶酸','MTHFR','','','',''],
+			['他汀','瑞舒伐他汀','SLCO1B1','','','','正常用药'],
+			['他汀','阿托伐他汀','APOE',IMG_GreenUp,'','','正常用药'],
+			['他汀','阿托伐他汀','CYP3A4','',IMG_BlueUp,'','正常用药'],
+			['他汀','阿托伐他汀','SLCO1B1','','','','正常用药'],
+			['他汀','辛伐他汀','ABCB1',IMG_GreenUp,'','','正常用药'],
+			['他汀','辛伐他汀','SLCO1B1','','','','正常用药'],
+			['他汀','氟伐他汀','APOE',IMG_GreenUp,'','','正常用药'],
+			['他汀','普伐他汀','APOE',IMG_GreenUp,'','','正常用药'],
+			['他汀','普伐他汀','SLCO1B1','','','','正常用药'],
+			['他汀','匹伐他汀','SLCO1B1','','','','正常用药'],
+			['他汀','洛伐他汀','CYP2D6','',IMG_BlueUp,'','正常用药'],
+			['抗栓药','氯吡格雷','ABCB1','','','','谨慎用药'],
+			['抗栓药','氯吡格雷','CYP2C19','','EM','','正常用药'],
+			['抗栓药','阿司匹林','PEAR1','','','','谨慎用药'],
+			['抗栓药','阿司匹林','PTGS1',IMG_GreenUp,'','','正常用药'],
+			['抗凝药','华法林','CYP2C9','',IMG_BlueUp,'','谨慎用药'],
+			['抗凝药','华法林','CYP4F2','',IMG_BlueUp,'','谨慎用药'],
+			['抗凝药','华法林','VKORC1','','','',''],
+			
+]
+INFO_DATA_table_obj=Table(INFO_DATA,colWidths=[PAGE_WIDTH/8,PAGE_WIDTH/8,PAGE_WIDTH/8,PAGE_WIDTH/12,PAGE_WIDTH/12,PAGE_WIDTH/12,PAGE_WIDTH/8])
+INFO_DATA_table_obj.setStyle(TableStyle([
+							('FONTNAME',(0,0),(-1,1),'SONGBOLD'),
+							('FONTNAME',(0,1),(0,-1),'song'),
+							('FONTNAME',(1,1),(1,-1),'song'),
+							('FONTNAME',(2,1),(2,-1),'Times-Roman'),
+							('FONTNAME',(-1,1),(-1,-1),'song'),
+							('FONTSIZE',(0,0),(-1,-1),8),
+							('ALIGN',(0,0),(-1,-1),"CENTER"),
+							('VALIGN',(0,0),(-1,-1),'MIDDLE'),
+							('GRID',(0,0),(-1,-1),0.1,"#A4C7F1"),#colors.lightskyblue
+							('SPAN',(0,0),(0,1)),
+							('SPAN',(1,0),(1,1)),
+							('SPAN',(2,0),(2,1)),
+							('SPAN',(3,0),(5,0)),
+							('SPAN',(6,0),(6,1)),
+							('BACKGROUND',(0,0),(-1,1),"#A4C7F1"),
+							('SPAN',(1,5),(1,7)),
+							('SPAN',(1,8),(1,11)),
+							('SPAN',(1,12),(1,14)),
+							('SPAN',(1,15),(1,16)),
+							('SPAN',(1,17),(1,18)),
+							('SPAN',(1,19),(1,21)),
+							('SPAN',(1,22),(1,23)),
+							('SPAN',(1,26),(1,27)),
+							('SPAN',(1,30),(1,31)),
+							('SPAN',(1,32),(1,33)),
+							('SPAN',(1,36),(1,37)),
+							('SPAN',(1,40),(1,42)),
+							('SPAN',(1,43),(1,44)),
+							('SPAN',(1,46),(1,47)),
+							('SPAN',(1,50),(1,51)),
+							('SPAN',(1,52),(1,53)),
+							('SPAN',(1,54),(1,56)),
+							('SPAN',(0,2),(0,4)),
+							('SPAN',(0,5),(0,21)),
+							('SPAN',(0,22),(0,25)),
+							('SPAN',(0,26),(0,29)),
+							('SPAN',(0,30),(0,37)),
+							('SPAN',(0,39),(0,49)),
+							('SPAN',(0,50),(0,53)),
+							('SPAN',(0,54),(0,56)),
+							('SPAN',(-1,5),(-1,7)),
+							('SPAN',(-1,8),(-1,11)),
+							('SPAN',(-1,12),(-1,14)),
+							('SPAN',(-1,15),(-1,16)),
+							('SPAN',(-1,17),(-1,18)),
+							('SPAN',(-1,19),(-1,21)),
+							('SPAN',(-1,22),(-1,23)),
+							('SPAN',(-1,26),(-1,27)),
+							('SPAN',(-1,30),(-1,31)),
+							('SPAN',(-1,32),(-1,33)),
+							('SPAN',(-1,36),(-1,37)),
+							('SPAN',(-1,40),(-1,42)),
+							('SPAN',(-1,43),(-1,44)),
+							('SPAN',(-1,46),(-1,47)),
+							('SPAN',(-1,50),(-1,51)),
+							('SPAN',(-1,52),(-1,53)),
+							('SPAN',(-1,54),(-1,56)),
+							
+							
+]))
+story.append(INFO_DATA_table_obj)
+story.append(Spacer(0.3*cm,0.3*cm))
+#story.append(Paragraph("<p><br/></p>",Style_N))
+story.append(Paragraph("<p><img src='/home/cdx/XieLab/Img_GreenUp.png' width=8 height=8></img><font fontName='song'>：该基因型患者使用对应药物较其他基因型患者疗效可能较好</font></p><br/>",Style_N))
+story.append(Paragraph("<p><img src='/home/cdx/XieLab/Img_RedDown.png' width=8 height=8></img><font fontName='song'>：该基因型患者使用对应药物较其他基因型患者疗效可能较差</font></p><br/>",Style_N))
+story.append(Paragraph("<p><img src='/home/cdx/XieLab/Img_BlueUp.png' width=8 height=8></img><font fontName='song'>：该基因型患者使用对应药物较其他基因型患者代谢可能较快</font></p><br/>",Style_N))
+story.append(Paragraph("<p><img src='/home/cdx/XieLab/Img_YellowDown.png' width=8 height=8></img><font fontName='song'>：该基因型患者使用对应药物较其他基因型患者代谢可能较慢</font></p><br/>",Style_N))
+story.append(Paragraph("<p><img src='/home/cdx/XieLab/Img_RedGanTan.png' width=8 height=8></img><font fontName='song'>：该基因型患者使用对应药物较其他基因型患者产生相应风险的概率可能较高</font></p><br/>",Style_N))
+#story.append(Paragraph("<p><font fontName='song'>*以上提示信息均基于受检样本的基因信息、相关数据库、医学指南和或相关文献，具体药品选择请结合：患者肝肾功能、心电图、既往用药等情况，由专科医生综合评估</font></p><br/>",Style_N))
+story.append(Paragraph("%s" % Text_Deal("*以上提示信息均基于受检样本的基因信息、相关数据库、医学指南和或相关文献，具体药品选择请结合：患者肝肾功能、心电图、既往用药等情况，由专科医生综合评估"),Style_N))
+print(Text_Deal("*以上提示信息均基于受检样本的基因信息、相关数据库、医学指南和或相关文献，具体药品选择请结合：患者肝肾功能、心电图、既往用药等情况，由专科医生综合评估"))
+story.append(PageBreak())
+
+story.append(Paragraph("具体药物解读",styleH1))
+FILE=os.listdir("/home/cdx/XieLab/qXXG200401002/pickle")
+Drug_No=0
+Drug_Order=['美托洛尔','阿替洛尔','卡维地洛','贝那普利','依那普利','赖诺普利','咪达普利','群多普利','卡托普利','氯沙坦','厄贝沙坦',
+			'坎地沙坦','氢氯噻嗪','螺内酯','氯噻酮','氨氯地平','硝苯地平','尼群地平','非洛地平','维拉帕米','叶酸','瑞舒伐他汀',
+			'阿托伐他汀','辛伐他汀','氟伐他汀','普伐他汀','匹伐他汀','洛伐他汀','氯吡格雷','阿司匹林','华法林']
+for i in range(len(Drug_Order)):
+	Drug_No+=1
+	#drugfile=re.search(Drug_Order[i],FILE)
+	Drug_DATA=pickle.load(open("/home/cdx/XieLab/qXXG200401002/pickle/"+str(Drug_Order[i])+"_detail.pickle",'rb'))
+	Drug_Title(story,Drug_DATA,"1."+str(Drug_No),styleH2)
+	Drug_Discription_One(story,Drug_DATA,styleH3,style_body)
+	Test_Result(story,Drug_DATA,styleH3,style_body)
+doc.build(story)
+#####################################################################################################
+
+#!/usr/bin/python
+
+#-*- coding:UTF-8 -*-
+
+from reportlab.pdfgen import canvas
+from reportlab.rl_config import defaultPageSize
+from reportlab.lib.units import inch
+import reportlab.rl_config
+reportlab.rl_config.warnOnMissingFontGlyphs=0
+from reportlab.lib.styles import getSampleStyleSheet,ParagraphStyle
+from reportlab.lib.pagesizes import A4
+from reportlab.platypus import Paragraph,SimpleDocTemplate,Spacer
+from reportlab.pdfbase import pdfmetrics
+#from reportlab.pdfbase.cidfonts import CIDFont,CIDTypeFace,findCMapFile
+from reportlab.pdfbase.ttfonts import TTFont
+from reportlab.lib import fonts
+import copy
+from reportlab.lib.enums import TA_JUSTIFY
+from six import BytesIO
+
+PAGE_HEIGHT=defaultPageSize[1];PAGE_WIDTH=defaultPageSize[0]
+pdfmetrics.registerFont(TTFont('song','/home/cdx/XieLab/SIMSUN.ttf'))
+pdfmetrics.registerFont(TTFont('hei','/home/cdx/XieLab/SIMHEI.ttf'))
+fonts.addMapping('song',0,0,'song')
+fonts.addMapping('song',0,1,'song')
+fonts.addMapping('song',1,0,'hei')
+fonts.addMapping('song',1,1,'hei')
+
+#Title_cn="急性感染辅助排查及免疫状态基础评估检测报告解释"
+#Title_en="Interpretation Report"
+PERSON={'Name':'张三李四','Age':50,'Sex':'男','Date':'2020/02/10'}
+METRICS=['C3_up','Lymph#_up','Eos#_up','RBC_down','CRP_up','RBC_down','CRP_up','RBC_down','CRP_up','RBC_down','CRP_up','RBC_down','CRP_up']
+Title={'C3_up':"补体C3升高",
+		'Lymph#_up':"淋巴细胞绝对值增高",
+		'Eos#_up':"嗜酸性粒细胞绝对值增高",
+		'RBC_down':"红细胞计数减少",
+		'CRP_up':"C反应蛋白升高"}
+DATA={'C3_up':"补体升高见于各种炎症性疾病、阻塞性黄疸、急性心肌梗死、溃疡性结肠炎、糖尿病、急性痛风、急性甲状腺炎、急性风湿热、皮肌炎、混合性结缔组织病、结节性动脉周围炎等.",
+		'Lymph#_up':"可见于某些传染病（百日咳，传染性单核细胞增多症，传染性淋巴细胞增多症，水痘流行性腮腺炎，病毒性肝炎，淋巴细胞性|白血病和淋巴瘤等）。",
+		'Eos#_up':"可见于过敏性疾病。皮肤病，寄生虫感染，脾切除，术后恢复。",
+		'RBC_down':"可见各种原因引起的贫血。",
+		'CRP_up':"可见各种急性炎症、组织损伤、手术创伤、放射性损伤等发作后数小时内迅速升高，并有成倍增长之势。病变好转时，又迅速降至正常，其升高幅度与感染的程度呈正相关。C反应蛋白被认为是人体急性炎症时反应最主要、最敏感的标志物之一。"}
+
+styles=getSampleStyleSheet() #获取样式集
+styleT_CN=copy.deepcopy(styles['Title'])
+styleT_CN.fontName='song'
+styleT_CN.leading=14
+#styleN_CN.firstLineIndent=20
+styleT_EN=copy.deepcopy(styles['Title'])
+styleT_EN.fontName='Times-Roman'
+styleT_EN.leading=14
+styleT_EN.spaceAfter=10
+styleN=copy.deepcopy(styles['Normal'])
+styleN.fontName='song'
+styleN.leading=10
+#styleN_EN.firstLineIndent=20
+#styleT=copy.deepcopy(styles['Title'])
+styleH1=copy.deepcopy(styles['Heading1'])
+styleH1.fontName='song'
+styleH1.leading=20
+styleH2=copy.deepcopy(styles['Heading2'])
+styleH2.fontName='song'
+styleH2.leading=17
+#styleH2.firstLineIndent=10
+styleH3=copy.deepcopy(styles['Heading3'])
+styleH2.fontName='song'
+styleH2.leading=17
+#styleH2.firstLineIndent=10
+style_limit=copy.deepcopy(styles['Heading1'])
+style_limit.fontName='song'
+style_limit.leading=22
+style_limit.textColor="lightblue"
+
+#自定义添加样式
+styles.add(ParagraphStyle(name='body',
+							fontName='song',
+							fontSize=10,
+							textColor='black',
+							leading=20, 
+							spaceBefore=0, #段前间距
+							spaceAfter=10, #段后间距
+							leftIndent=0,
+							rightIndent=0,
+							firstLineIndent=20, #缩进
+							alignment=TA_JUSTIFY, #对齐方式
+							
+							#bulletFontSize=15, #bullet为项目符号相关的设置
+							#bulletIndent=-50,
+							#bulletAnchor='start',
+							#bulletFontName='Symbol'
+						)
+			)
+style_body=styles['body']
+
+story=[]
+story.append(Paragraph("<b>急性感染辅助排查及免疫状态基础评估检测报告解释</b>",styleT_CN))
+story.append(Paragraph("<b>Interpretation Report</b>",styleT_EN))
+story.append(Paragraph("<b>一、基本信息</b>",styleH1))
+story.append(Paragraph("姓名: %s" % PERSON['Name'],style_body))
+story.append(Paragraph("性别: %s" % PERSON['Sex'],style_body))
+story.append(Paragraph("年龄: %s" % PERSON['Age'],style_body))
+story.append(Paragraph("检测日期: %s" % PERSON['Date'],style_body))
+story.append(Paragraph("<b>二、总体结论</b>",styleH1))
+story.append(Paragraph("检测结果有%d项指标异常（含感染及免疫相关指标），建议前往相关医疗机构进行下一步检查。" % len(METRICS),style_body))
+story.append(Paragraph("<b>三、相关指标结果解释</b>",styleH1))
+for i in range(len(METRICS)):
+	i+=1
+	#story.append(Paragraph("<b>%d、%s</b>" % (i,Title[METRICS[i-1]]),styleH2))
+	story.append(Paragraph("<b><seq id='spam'>、%s</seq></b>" % Title[METRICS[i-1]],styleH2))
+	story.append(Paragraph("%s" % DATA[METRICS[i-1]],style_body))
+	#story.append([Spacer(1,0.3*inch)])
+story.append(Paragraph("",styleH2))
+story.append(Paragraph("<b>免责声明: 本解释不作为临床诊断用途，疾病诊断需结合临床症状及其他检测结果进行综合评估。</b>",style_limit))
+doc=SimpleDocTemplate('%s.pdf' % PERSON['Name'],pagesizes=A4)
+#doc.build(story,onFirstPage=FistPage,onLaterPages=foot)
+doc.build(story)
+########################################################################################
+
+#!/usr/bin/env Rscript
+
+begin_time <- Sys.time()
+
+library("optparse")
+library(tidyverse)
+library(officer)
+library(flextable)
+library(readxl)
+library(jsonlite)
+
+option_list = list(
+  make_option(c("-i", "--info_dir"), type="character", default=NULL, 
+              help="sample information directory", metavar="character"),
+  make_option(c("-t", "--template"), type="character", default=NULL, 
+              help="template docx file", metavar="character"),
+  make_option(c("-m", "--images"), type="character", default=NULL, 
+              help="images directory", metavar="character"),
+  make_option(c("-o", "--out"), type="character", default="test.docx", 
+              help="output file [default= %default]", metavar="character")
+); 
+
+opt_parser = OptionParser(option_list=option_list);
+opt = parse_args(opt_parser);
+
+print(opt)
+
+
+info_dir <- opt$info_dir
+template_doc <- opt$template
+
+
+
+FitFlextableToPage <- function(ft, pgwidth = 7.55){
+  
+  ft_out <- ft %>% autofit()
+  
+  ft_out <- width(ft_out, width = dim(ft_out)$widths*pgwidth /(flextable_dim(ft_out)$widths))
+  return(ft_out)
+}
+
+print('begin process pgx_summary1')
+
+pgx_summary1 <-list.files(info_dir, '.pgx_summary1.xlsx', full.names = TRUE)
+summary_table_1 <- read_excel(pgx_summary1, col_names = c('a','b'), skip = 1) %>%
+  flextable() %>%
+  theme_box() %>%
+  align(j=2, align = 'left') %>%
+  align(j=1, align = 'left') %>%
+  compose(i=1,j='a', value=as_paragraph( as_image(src=list.files(opt$images, 'Img_GreenCycle.png', full.names = T), width=.20, height=.20), ' ', a)) %>%
+  compose(i=2,j='a', value=as_paragraph( as_image(src=list.files(opt$images, 'Img_RedCue.png', full.names = T), width=.20, height=.20), ' ', a)) %>%
+  compose(i=3,j='a', value=as_paragraph( as_image(src=list.files(opt$images, 'Img_YellowGanTan.png', full.names =T), width=.20, height=.20), ' ', a)) %>%
+  compose(i=4,j='a', value=as_paragraph( as_image(src=list.files(opt$images, 'Img_RedGanTan.png', full.names =T), width=.20, height=.20), ' ', a)) %>%
+  delete_part(part='header') %>%
+  FitFlextableToPage() %>%
+  width(j=1, width=1.1811) %>%
+  width(j=2, width=6.10) %>%
+  padding(padding = 2, part = 'body')
+
+print('end process pgx_summary1')
+
+pgx_info <-list.files(info_dir, '.all.final.pgx_info.xlsx', full.names = TRUE)  
+pgx_info_df <- read_excel(pgx_info)
+
+pgx_summary2 <-list.files(info_dir, '.pgx_summary2.xlsx', full.names = TRUE)  
+print(pgx_summary2)
+pgx_summary_df <- read_excel(pgx_summary2)
+summary_table_2 <- read_excel(pgx_summary2) %>%
+  flextable() %>%
+  compose(j='疗效', i= ~ str_detect(str_replace_na(pgx_summary_df$疗效, ' a'), '好'), value=as_paragraph(as_image(src=list.files(opt$images, 'Img_GreenUp.png', full.names = T), width=.20, height=.20))) %>%
+  compose(j='疗效', i= ~ str_detect(str_replace_na(pgx_summary_df$疗效, ' a'), '差'), value=as_paragraph(as_image(src=list.files(opt$images, 'Img_RedDown.png', full.names = T), width=.20, height=.20))) %>%
+  compose(j='风险', i= ~ str_detect(str_replace_na(pgx_summary_df$风险, ' a'), '风险'), value=as_paragraph(as_image(src=list.files(opt$images, 'Img_RedGanTan.png', full.names = T), width=.20, height=.20))) %>%
+  compose(j='代谢', i= ~ str_detect(str_replace_na(pgx_summary_df$代谢, ' a'), '较快'), value=as_paragraph(as_image(src=list.files(opt$images, 'Img_BlueUp.png', full.names = T), width=.20, height=.20))) %>%
+  compose(j='代谢', i= ~ str_detect(str_replace_na(pgx_summary_df$代谢, ' a'), '慢'), value=as_paragraph(as_image(src=list.files(opt$images, 'Img_YellowDown.png', full.names = T), width=.20, height=.20))) %>%
+  compose(j='代谢', i= ~ str_detect(str_replace_na(pgx_summary_df$代谢, ' a'), '广泛'), value=as_paragraph('EM')) %>%
+  compose(j='代谢', i= ~ str_detect(str_replace_na(pgx_summary_df$代谢, ' a'), '中间'), value=as_paragraph('IM')) %>%
+  compose(j='代谢', i= ~ str_detect(str_replace_na(pgx_summary_df$代谢, ' a'), '正常'), value=as_paragraph('EM')) %>%
+  theme_box() %>%
+  merge_v(j='分类') %>%
+  merge_v(j='药物名称') %>%
+  merge_v(j='药物名称', target = '用药建议')
+
+
+
+s2_header <- tibble(
+  'col_keys' = c("分类", "药物名称", "基因", "疗效", "代谢", "风险", "用药建议"),
+  'col1' = c("分类", "药物名称", "基因", '药物疗效', '药物疗效', '药物疗效', '用药建议' ),
+  'col2' = c("分类", "药物名称", "基因", "疗效", "代谢", "风险", "用药建议"),
+)
+
+
+summary_table_2 <- set_header_df(summary_table_2, mapping = s2_header, key = 'col_keys') %>%
+  merge_h(part = 'header') %>%
+  merge_v(part = 'header') %>%
+  theme_box() %>%
+  bg(bg='#A4C7F1', part='header') %>%
+  align(align='center', part='all') %>%
+  width(j=1, width=1.1811) %>%
+  width(j=2, width = 1.2795) %>%
+  width(j=3, width = 1.5748) %>%
+  width(j=4, width = 0.6889) %>%
+  width(j=5, width = 0.6889) %>%
+  width(j=6, width = 0.6889) %>%
+  width(j=7, width = 1.1811) %>%
+  add_footer_lines(value='') %>%
+  compose(i=1, j=1, part = 'footer', value = as_paragraph(as_image(src='images/Img_GreenUp.png', width=.20, height=.20),  ' ：该基因型患者使用对应药物较其他基因型患者疗效可能较好') ) %>%
+  add_footer_lines(value='') %>%
+  compose(i=2, j=1, part = 'footer', value = as_paragraph(as_image(src='images/Img_RedDown.png', width=.20, height=.20),  ' ：该基因型患者使用对应药物较其他基因型患者疗效可能较差')) %>%
+  add_footer_lines(value='') %>%
+  compose(i=3, j=1, part = 'footer', value = as_paragraph(as_image(src='images/Img_BlueUp.png', width=.20, height=.20),  ' ：该基因型患者使用对应药物较其他基因型患者代谢可能较快')) %>%
+  add_footer_lines(value='') %>%
+  compose(i=4, j=1, part = 'footer', value = as_paragraph(as_image(src='images/Img_YellowDown.png', width=.20, height=.20),  ' ：该基因型患者使用对应药物较其他基因型患者代谢可能较慢')) %>%
+  add_footer_lines(value='') %>%
+  compose(i=5, j=1, part = 'footer', value = as_paragraph(as_image(src='images/Img_RedGanTan.png', width=.20, height=.20), ' ：该基因型患者使用对应药物较其他基因型患者产生相应风险的概率可能较高')) %>%
+  add_footer_lines(value='') %>%
+  compose(i=6, j=1, part = 'footer', value = as_paragraph(as_chunk('*以上提示信息均基于受检样本的基因信息、相关数据库、医学指南和或相关文献，具体药品选择请结合：患者肝肾功能、心电图、既往用药等情况，由专科医生综合评估'))) %>%
+  padding(padding=3, part='footer') %>%
+  delete_part(part = 'header')
+
+def_cell <- fp_cell(border = fp_border(color='#A4C7F1'))
+summary_table_2 <- style(summary_table_2, pr_c = def_cell)
+
+
+
+s2_header <- tribble(
+  ~分类, ~药物名称, ~基因, ~疗效, ~代谢, ~风险, ~用药建议,
+  "分类", "药物名称", "基因", '药物疗效', '药物疗效', '药物疗效', '用药建议',
+  "分类", "药物名称", "基因", "疗效", "代谢", "风险", "用药建议",
+)
+
+s2_header_table <- flextable(s2_header) %>%
+  merge_v(part='body') %>%
+  merge_h(part='body') %>%
+  theme_box() %>%
+  delete_part(part='header') %>%
+  width(j=1, width=1.1811) %>%
+  width(j=2, width = 1.2795) %>%
+  width(j=3, width = 1.5748) %>%
+  width(j=4, width = 0.6889) %>%
+  width(j=5, width = 0.6889) %>%
+  width(j=6, width = 0.6889) %>%
+  width(j=7, width = 1.1811) %>%
+  bg(bg='#A4C7F1', part='body') %>%
+  delete_part(part = 'header') %>%
+  align(align = 'center') %>%
+  border_remove() %>%
+  border_outer()
+
+
+doc <- read_docx(template_doc) %>%
+  body_add_par('总体用药建议', style = 'summary_table_title') %>%
+  body_add_flextable(summary_table_1) %>%
+  body_add_par('') %>%
+  body_add_par(' 结果解析总表', style = 'summary_table_title') %>%
+  body_add_flextable(s2_header_table) %>%
+  body_add_flextable(summary_table_2)
+
+
+doc <- body_add_par(doc, '', style = 'zhengwen')
+doc <- body_add_par(doc, '具体药物解读', style = 'summary_table_title')
+
+
+print_drug <- function(doc, drug, info_dir) {
+  
+  json_file <- list.files(info_dir, str_c(drug, '.json'), full.names = TRUE)
+  table_file <- list.files(info_dir, str_c(drug, '_pgx_test_reuslt_table'), full.names = TRUE)
+  
+  
+  if (is.na(json_file) | is.na(table_file)) {
+    return(doc)
+  }
+  
+  table_file_df <- read_excel(table_file)
+  pgx_table <- flextable(table_file_df, cwidth = 1.5) %>%
+    theme_box() %>%
+    align(align = 'center', part = 'all') %>%
+    bg(bg='#A4C7F1', part='header') %>%
+    merge_v(j='基因', part='body')
+
+  if ('CYP2D6' %in% table_file_df$基因) {
+    pgx_table <- merge_v(pgx_table, j='基因', target='基因型', part='body')
+  }
+  if ('CYP2D6' %in% table_file_df$基因 & '代谢型' %in% names(table_file_df)) {
+    pgx_table <- merge_v(pgx_table, j='基因', target='代谢型', part='body')
+  }
+  if ('CYP2C9' %in% table_file_df$基因) {
+    pgx_table <- merge_v(pgx_table, j='基因', target='基因型', part='body')
+  }
+  if ('CYP2C9' %in% table_file_df$基因 & '代谢型' %in% names(table_file_df)) {
+    pgx_table <- merge_v(pgx_table, j='基因', target='代谢型', part='body')
+  }
+  if ('CYP2C19' %in% table_file_df$基因) {
+    pgx_table <- merge_v(pgx_table, j='基因', target='基因型', part='body')
+  }
+  if ('CYP2C19' %in% table_file_df$基因 & '代谢型' %in% names(table_file_df)) {
+    pgx_table <- merge_v(pgx_table, j='基因', target='代谢型', part='body')
+  }
+  if ('APOE' %in% table_file_df$基因) {
+    pgx_table <- merge_v(pgx_table, j='基因', target='基因型', part='body')
+  }
+
+
+  drug_info <- read_json(json_file)
+
+  doc <- body_add_par(doc, str_trim(drug_info$drug_title), style = 'heading_1')
+  print('1')
+  
+  #doc <- body_add_par(doc, str_c('1)', '  ', str_trim(drug_info$category$title)), style='heading_2')
+  doc <- body_add_par(doc,  str_trim(drug_info$category$title), style='heading_2')
+  for (t in drug_info$category$text) {
+    doc <- body_add_par(doc, str_trim(t), style = 'zhengwen')
+  }
+  print('2')
+  
+  #doc <- body_add_par(doc, str_c('2)', '  ', str_trim(drug_info$clinical_usage$title)), style='heading_2')
+  doc <- body_add_par(doc, str_trim(drug_info$clinical_usage$title), style='heading_2')
+  for (t in drug_info$clinical_usage$text) {
+    doc <- body_add_par(doc, str_trim(t), style = 'zhengwen')
+  }  
+  print('3')
+  
+  #doc <- body_add_par(doc, str_c('3)', '  ','基因检测结果 GENE TEST RESULT'), style = 'heading_2')
+  doc <- body_add_par(doc, '基因检测结果 GENE TEST RESULT', style = 'heading_2')
+  doc <- body_add_flextable(doc, pgx_table)
+  print('4')
+  
+  #doc <- body_add_par(doc, str_c('4)', '  ', str_trim(drug_info$result_description$title)), style='heading_2')
+  doc <- body_add_par(doc, str_trim(drug_info$result_description$title), style='heading_2')
+  for (t in drug_info$result_description$text) {
+    doc <- body_add_par(doc, str_trim(t), style = 'zhengwen')
+  }  
+  print('5')
+  
+  #doc <- body_add_par(doc, str_c('5)', '  ', str_trim(drug_info$comment$title)), style='heading_2')
+  doc <- body_add_par(doc, str_trim(drug_info$comment$title), style='heading_2')
+  for (t in drug_info$comment$text) {
+    doc <- body_add_par(doc, str_trim(t), style = 'zhengwen')
+  }  
+  print('6')
+  
+  #doc <- body_add_par(doc, str_c('5)', '  ', str_trim(drug_info$interaction$title)), style='heading_2')
+  doc <- body_add_par(doc, str_trim(drug_info$interaction$title), style='heading_2')
+  for (t in drug_info$interaction$text) {
+    doc <- body_add_par(doc, str_trim(t), style = 'zhengwen')
+  }  
+  print('7')
+  
+  #doc <- body_add_par(doc, str_c('6)', '  ', str_trim(drug_info$jin_ji_zheng$title)), style='heading_2')
+  doc <- body_add_par(doc, str_trim(drug_info$jin_ji_zheng$title), style='heading_2')
+  for (i in seq_along(drug_info$jin_ji_zheng$text)) {
+    label <- letters[i]
+    t <- drug_info$jin_ji_zheng$text[i]
+    t <- str_trim(t)
+    if ( str_detect(str_sub(t, 1, 3), "\\)" ) ) {
+      doc <- body_add_par(doc, str_trim(t), style = 'list_paragraph_1')
+    } else {
+      doc <- body_add_par(doc, str_c(label, ')', "  ", str_trim(t)), style = 'list_paragraph_1')
+    }
+  }
+  print('8')
+  
+  #doc <- body_add_par(doc, str_c('7)', '  ', str_trim(drug_info$reference$title)), style='heading_2')
+  doc <- body_add_par(doc, str_trim(drug_info$reference$title), style='heading_2')
+  for (i in seq_along(drug_info$reference$text)) {
+    t <- drug_info$reference$text[[i]]
+    #doc <- body_add_par(doc, str_c('[', as.character(i), ']', '  ', str_trim(t)), style = 'list_paragraph_reference')
+    doc <- body_add_par(doc, str_trim(t), style = 'list_paragraph_reference')
+  }
+  print('9')
+  
+  
+  return(doc)
+}
+
+print_warfarin <- function(doc, drug, info_dir) {
+  drug <- '华法林'
+  
+  json_file <- list.files(info_dir, str_c(drug, '_special.json'), full.names = TRUE)
+  table_file <- list.files(info_dir, str_c(drug, '_pgx_test_reuslt_table'), full.names = TRUE)
+  w_table_file <- list.files(info_dir, str_c(drug, '_special_table_1.xlsx'), full.names=TRUE)
+  i_table_file <- list.files(info_dir, str_c(drug, '_special_table_2.xlsx'), full.names = TRUE)
+  
+  if (is.na(json_file) | is.na(table_file) | is.na(w_table_file) | is.na(i_table_file)) {
+    return(doc)
+  }
+  
+  table_file_df <- read_excel(table_file)
+  pgx_table <- read_excel(table_file) %>%
+    flextable(cwidth = 1.5) %>%
+    theme_box() %>%
+    align(align = 'center', part = 'all') %>%
+    bg(bg='#A4C7F1', part='header') %>%
+    merge_v(j='基因', part='body')
+  
+  if ('CYP2C9' %in% table_file_df$基因) {
+    pgx_table <- merge_v(pgx_table, j='基因', target='基因型', part='body')
+  }
+  if ('CYP2C9' %in% table_file_df$基因 & '代谢型' %in% names(table_file_df)) {
+    pgx_table <- merge_v(pgx_table, j='基因', target='代谢型', part='body')
+  }
+  if ('CYP2C19' %in% table_file_df$基因) {
+    pgx_table <- merge_v(pgx_table, j='基因', target='基因型', part='body')
+  }
+  if ('CYP2C19' %in% table_file_df$基因 & '代谢型' %in% names(table_file_df)) {
+    pgx_table <- merge_v(pgx_table, j='基因', target='代谢型', part='body')
+  }
+  if ('APOE' %in% table_file_df$基因) {
+    pgx_table <- merge_v(pgx_table, j='基因', target='基因型', part='body')
+  }
+
+  w_table <- read_excel(w_table_file) %>%
+    flextable(cwidth = 1.5) %>%
+    align(align = 'center', part = 'all') %>%
+    merge_v(j=1, part='body') %>%
+    merge_h(i=1, part='body') %>%
+    delete_part(part='header') %>%
+    hline_top(part='body', border = fp_border(width = 2)) %>%
+    hline(i=1,j=2:4, border = fp_border(), part='body') %>%
+    hline(i=2, border = fp_border(), part ='body')
+  
+  i_table <- read_excel(i_table_file) %>%
+    flextable() %>%
+    theme_box() %>%
+    width(j=1, width = 1.0) %>%
+    width(j=2, width = 4.0) %>%
+    width(j=3, width =2.3) %>%
+    align(align = 'center', part = 'all') %>%
+    delete_part(part = 'header')
+    
+  
+  drug_info <- read_json(json_file)
+  
+  doc <- body_add_par(doc, drug_info$drug_title, style = 'heading_1')
+  print('1')
+  
+  #doc <- body_add_par(doc, str_c('1)', '  ', str_trim(drug_info$category$title)), style='heading_2')
+  doc <- body_add_par(doc, str_trim(drug_info$category$title), style='heading_2')
+  for (t in drug_info$category$text) {
+    doc <- body_add_par(doc, str_trim(t), style = 'zhengwen')
+  }
+  print('2')
+  
+  #doc <- body_add_par(doc, str_c('2)', '  ', str_trim(drug_info$clinical_usage$title)), style='heading_2')
+  doc <- body_add_par(doc, str_trim(drug_info$clinical_usage$title), style='heading_2')
+  for (t in drug_info$clinical_usage$text) {
+    doc <- body_add_par(doc, str_trim(t), style = 'zhengwen')
+  }  
+  print('3')
+  
+  #doc <- body_add_par(doc, str_c('3)', '  ','基因检测结果 GENE TEST RESULT'), style = 'heading_2')
+  doc <- body_add_par(doc, '基因检测结果 GENE TEST RESULT', style = 'heading_2')
+  doc <- body_add_flextable(doc, pgx_table)
+  print('4')
+  
+  #doc <- body_add_par(doc, str_c('4)', '  ', str_trim(drug_info$result_description_1$title)), style='heading_2')
+  doc <- body_add_par(doc, str_trim(drug_info$result_description_1$title), style='heading_2')
+  for (t in drug_info$result_description_1$text) {
+    doc <- body_add_par(doc, str_trim(t), style = 'zhengwen')
+  }  
+  doc <- body_add_flextable(doc, w_table)
+  doc <- body_add_par(doc, '')
+  for (t in drug_info$result_description_2$text) {
+    doc <- body_add_par(doc, str_trim(t), style = 'zhengwen')
+  } 
+  print('5')
+  
+  #doc <- body_add_par(doc, str_c('5)', '  ', str_trim(drug_info$comment$title)), style='heading_2')
+  doc <- body_add_par(doc, str_trim(drug_info$comment$title), style='heading_2')
+  for (t in drug_info$comment$text) {
+    doc <- body_add_par(doc, str_trim(t), style = 'zhengwen')
+  }  
+  print('6')
+  
+  #doc <- body_add_par(doc, str_c('5)', '  ', str_trim(drug_info$interaction$title)), style='heading_2')
+  doc <- body_add_par(doc, str_trim(drug_info$interaction$title), style='heading_2')
+  for (t in drug_info$interaction$text) {
+    doc <- body_add_par(doc, str_trim(t), style = 'zhengwen')
+  }  
+  doc <- body_add_flextable(doc, i_table )
+  print('7')
+  
+  #doc <- body_add_par(doc, str_c('6)', '  ', str_trim(drug_info$jin_ji_zheng$title)), style='heading_2')
+  doc <- body_add_par(doc, str_trim(drug_info$jin_ji_zheng$title), style='heading_2')
+  for (i in seq_along(drug_info$jin_ji_zheng$text)) {
+    label <- letters[i]
+    t <- drug_info$jin_ji_zheng$text[i]
+    t <- str_trim(t)
+    if ( str_detect(str_sub(t, 1, 3), "\\)" ) ) {
+      doc <- body_add_par(doc, str_trim(t), style = 'list_paragraph_1')
+    } else {
+      doc <- body_add_par(doc, str_c(label, ')', "  ", str_trim(t)), style = 'list_paragraph_1')
+    }
+  }
+  print('8')
+  
+  #doc <- body_add_par(doc, str_c('7)', '  ', str_trim(drug_info$reference$title)), style='heading_2')
+  doc <- body_add_par(doc, str_trim(drug_info$reference$title), style='heading_2')
+  for (i in seq_along(drug_info$reference$text)) {
+    t <- drug_info$reference$text[[i]]
+    #doc <- body_add_par(doc, str_c('[', as.character(i), ']', '  ', str_trim(t)), style = 'list_paragraph_reference')
+    doc <- body_add_par(doc, str_trim(t), style = 'list_paragraph_reference')
+  }
+  print('9')
+  
+  
+  return(doc)
+}
+
+drugs <- unique(pgx_info_df$药物)
+
+for (drug in drugs) {
+  if (drug == '华法林') {
+    print_warfarin(doc, drug, info_dir)
+  }
+  else {
+    print_drug(doc, drug, info_dir)
+  }
+}
+
+#sample_info <- read_tsv(list.files(info_dir, 'sample_info.tsv', full.names = T))
+#name <- sample_info$姓名
+#gender <- sample_info$性别
+#sample_id <- sample_info$样本编号
+#age <- sample_info$年龄
+#sample_barcode <- sample_info$预置条码
+#sample_hospital <- sample_info$送检单位
+#print(sample_info)
+#doc <- headers_replace_all_text(doc, 'xing_ming', name)
+#doc <- headers_replace_all_text(doc, 'xing_bie', gender)
+#doc <- headers_replace_all_text(doc, 'nian_ling', age)
+#doc <- headers_replace_all_text(doc, 'sample_id', sample_id)
+#doc <- headers_replace_all_text(doc, 'sample_barcode', sample_barcode)
+#doc <- headers_replace_all_text(doc, 'sample_hospital', sample_hospital)
+print(doc, target=opt$out)
+print(Sys.time() - begin_time)
+########################################################
+
+library(officer)
+library(flextable)
+library(readxl)
+library(stringr)
+
+#Table1<-read_excel("Table1.xlsx",col_names=c("a",'b'),skip=1)
+#YaoWu_Genome<-unlist(strsplit(Table1[1,]$b,split = "，"))
+#Row1_Num<-ceiling(length(YaoWu_Genome)/2)
+#BiaoZhun_ChuFang<-unlist(strsplit(Table1[2,]$b,split = "，"))
+#Row2_Num<-ceiling(length(BiaoZhun_ChuFang)/2)
+#FengXian<-unlist(strsplit(Table1[3,]$b,split = "\r\n"))
+#Row3_Num<-length(FengXian)
+#YaoWu_DF<-as.data.frame(matrix(c(YaoWu_Genome,rep("",ceiling(length(YaoWu_Genome)/Row3_Num)*Row3_Num-length(YaoWu_Genome))),nrow=Row3_Num,byrow=TRUE))
+#colnames(YaoWu_DF)<-paste("药物",seq(dim(YaoWu_DF)[2]))
+#BiaoZhun_DF<-as.data.frame(matrix(c(BiaoZhun_ChuFang,rep("",ceiling(length(BiaoZhun_ChuFang)/Row3_Num)*Row3_Num-length(BiaoZhun_ChuFang))),nrow=Row3_Num,byrow=TRUE))
+#colnames(BiaoZhun_DF)<-paste("标准",seq(dim(BiaoZhun_DF)[2]))
+#FengXian_DF<-as.data.frame(matrix(FengXian,ncol = 1))
+#Total_Table_One<-cbind(YaoWu_DF,BiaoZhun_DF)
+#Total_Table_One<-cbind(Total_Table_One,FengXian_DF)
+
+
+Text_Paste<-function(Match_Data){
+  if (!is.na(Match_Data$C3)) {
+    Comment2_Text<-paste(Match_Data$C2,Match_Data$C3,sep="")
+  }else{Comment2_Text<-Match_Data$C2}
+  if (is.na(Match_Data$C4)) {
+    Comment2_Text<-paste(Comment2_Text,"",sep="")
+  }else{Comment2_Text<-paste(Comment2_Text,Match_Data$C4,sep="")}
+  if (is.na(Match_Data$C5)) {
+    Comment2_Text<-paste(Comment2_Text,"",sep="")
+  }else{Comment2_Text<-paste(Comment2_Text,Match_Data$C5,sep="")}
+  return(Comment2_Text)
+}
+
+Total_Drug_Chinese<-read_excel("drug_total_chinese.xlsx",col_names = FALSE)
+Total_Drug_Chinese<-as.data.frame(Total_Drug_Chinese)
+colnames(Total_Drug_Chinese)<-c("Drug","Gene1","Gene2","Gene3","Gene4","FXout","Flag","C1","C2","C3","C4","C5")
+Sample_Info<-read_excel("GXY_Test_Sample_Info.xlsx",col_names = TRUE)
+colnames(Sample_Info)<-c("Gene Symbol","NCBI SNP Reference","Call","Sample ID","GeneType","Assay ID","Genotype")
+if(length(grep("复测",Sample_Info$Call))>0){
+  Sample_Info<-Sample_Info[-grep("复测",Sample_Info$Call),]
+}
+Diplotype<-read.csv("qXXG200417007.diplotype.tsv",sep='\t',header=TRUE,stringsAsFactors=FALSE)
+
+Sample_Info$diplotype<-""
+Sample_Info$phenotype_p<-""
+Sample_Info$phenotype<-""
+for (tid in seq.int(from=1,to=dim(Sample_Info)[1],by=1)) {
+  Gene_tmp<-str_c(c(Sample_Info[tid,1]))
+  if (length(which(Gene_tmp==Diplotype$gene))>0) {
+    Sample_Info[tid,]$diplotype<-Diplotype[which(Gene_tmp==Diplotype$gene),]$diplotype
+    Sample_Info[tid,]$phenotype_p<-Diplotype[which(Gene_tmp==Diplotype$gene),]$phenotype_p
+    Sample_Info[tid,]$phenotype<-Diplotype[which(Gene_tmp==Diplotype$gene),]$phenotype
+  }
+}
+
+GaoXueYa_Gene_List<-c("CYP2D6","CYP2C9","CYP3A5","ABCB1","ACE","ADD1",
+                      "ADRB1","AGT","CACNA1C","KCNJ1","MTHFR","NEDD4L",
+                      "PTGER3","SLCO1B1")
+
+###############################Drug Information Extrating#########################
+Search_Drug_Summary<-list('美托洛尔'=c('rs1801253','CYP2D6'),'卡维地洛'=c('rs1801253','CYP2D6'),'阿替洛尔'=c('rs1801253'),'ACE抑制剂'=c('BDKRB2','PTGER3'),'贝那普利 咪达普利'=c('rs5051','BDKRB2','PTGER3'),'卡托普利 赖诺普利'=c('rs699','BDKRB2','PTGER3'),'依那普利'=c('rs4149056','rs699','BDKRB2','PTGER3'),"氯沙坦"=c('CYP2C9','ABCB1'),"厄贝沙坦"=c("CYP2C9"),"坎地沙坦"=c("AGTR1"),"钙通道阻滞剂"=c("rs2238032"),"氨氯地平"=c("rs776746"),"硝苯地平"=c("rs776746"),"维拉帕米"=c("CACNA1C","ABCB1"),"氢氯噻嗪"=c("NEDD4L","KCNJ1"),"螺内酯"=c("ADD1"),"氯噻酮"=c('ACE'),"叶酸"=c("rs1801133"))
+Search_Drug_Name<-names(Search_Drug_Summary)
+Drug_Table_Info<-data.frame(stringsAsFactors = FALSE)
+Drug_Type<-list("β-受体阻滞剂"=c("美托洛尔","卡维地洛","阿替洛尔"),
+                "ACE抑制剂"=c("ACE抑制剂","依那普利","贝那普利 咪达普利","卡托普利 赖诺普利"),
+                "ARB血管紧张素Ⅱ受体阻滞剂"=c("氯沙坦","厄贝沙坦","坎地沙坦"),"利尿剂"=c("氢氯噻嗪","螺内酯","氯噻酮"),
+                "钙通道阻滞剂"=c("氨氯地平","硝苯地平","维拉帕米","钙通道阻滞剂"),"辅助用药"=c("叶酸"))
+YaoWu_Data<-c()
+BiaoZhun_Data<-c()
+FengXian_Data<-c()
+for (lid in seq.int(from=1,to=length(Search_Drug_Summary),by=1)) {
+  if (Search_Drug_Name[lid]=="美托洛尔") {
+    TMP_DATA<-Total_Drug_Chinese[Search_Drug_Name[lid]==Total_Drug_Chinese$Drug,]
+    #rs_snp<-Search_Drug_Summary[[Search_Drug_Name[lid]]][1]
+    #Gene_CYP<-Search_Drug_Summary[[Search_Drug_Name[lid]]][2]
+    Gene1_Phenotype<-unique(Sample_Info[grep("CYP2D6",Sample_Info$`Gene Symbol`),]$phenotype)
+    Gene2_Call<-Sample_Info[grep("rs1801253",Sample_Info$`NCBI SNP Reference`),]$Call
+    Gene2_Call<-gsub("/","",Gene2_Call)
+    Gene2_Call_List<-unlist(strsplit(Gene2_Call,split=""))
+    Gene2_Call_Ver<-paste(Gene2_Call_List[2],Gene2_Call_List[1],sep="")
+    #Gene2_Call<-str_c(Gene2_Call_tmp[1],Gene2_Call_tmp[2],sep="")
+    print(Search_Drug_Name[lid])
+    if (length(Gene2_Call)>0&length(Gene1_Phenotype)>0) {
+      Match_Data<-TMP_DATA[which(Gene1_Phenotype==TMP_DATA$Gene2&(Gene2_Call==TMP_DATA$Gene1|Gene2_Call_Ver==TMP_DATA$Gene1)),]
+      
+      if (Match_Data$Flag==1) {
+        YaoWu_Data<-c(YaoWu_Data,Match_Data$Drug)
+      }
+      else if (Match_Data$Flag==2) {
+        BiaoZhun_Data<-c(BiaoZhun_Data,Match_Data$Drug)
+      }
+      if (Search_Drug_Name[lid] %in% Drug_Type$`β-受体阻滞剂`) {
+        Comment2_Text<-Text_Paste(Match_Data)
+        #Drug_TmpTable<-data.frame(V1=c(Search_Drug_Name[lid]),V2=c("β-受体阻滞剂"),V3=c(Match_Data$C1),V4=c(Match_Data$C2),stringsAsFactors = FALSE)
+        Drug_TmpTable<-data.frame(V1=c(Search_Drug_Name[lid]),V2=c("β-受体阻滞剂"),V3=c(Match_Data$C1),V4=c(Comment2_Text),stringsAsFactors = FALSE)
+        Drug_Table_Info<-rbind(Drug_Table_Info,Drug_TmpTable)
+      }
+    }
+  }else if (Search_Drug_Name[lid]=="卡维地洛") {
+    TMP_DATA<-Total_Drug_Chinese[Search_Drug_Name[lid]==Total_Drug_Chinese$Drug,]
+    Gene1_Phenotype<-unique(Sample_Info[grep("CYP2D6",Sample_Info$`Gene Symbol`),]$phenotype)
+    Gene2_Call<-Sample_Info[grep("rs1801253",Sample_Info$`NCBI SNP Reference`),]$Call
+    Gene2_Call<-gsub("/","",Gene2_Call)
+    Gene2_Call_List<-unlist(strsplit(Gene2_Call,split=""))
+    Gene2_Call_Ver<-paste(Gene2_Call_List[2],Gene2_Call_List[1],sep="")
+    print(Search_Drug_Name[lid])
+    if (length(Gene2_Call)>0&length(Gene1_Phenotype)>0) {
+      Match_Data<-TMP_DATA[which(Gene1_Phenotype==TMP_DATA$Gene2&(Gene2_Call==TMP_DATA$Gene1|Gene2_Call_Ver==TMP_DATA$Gene1)),]
+      if (Match_Data$Flag==1) {
+        YaoWu_Data<-c(YaoWu_Data,Match_Data$Drug)
+      }
+      else if (Match_Data$Flag==2) {
+        BiaoZhun_Data<-c(BiaoZhun_Data,Match_Data$Drug)
+      }
+      if (Search_Drug_Name[lid] %in% Drug_Type$`β-受体阻滞剂`) {
+        Comment2_Text<-Text_Paste(Match_Data)
+        #Drug_TmpTable<-data.frame(V1=c(Search_Drug_Name[lid]),V2=c("β-受体阻滞剂"),V3=c(Match_Data$C1),V4=c(Match_Data$C2),stringsAsFactors = FALSE)
+        Drug_TmpTable<-data.frame(V1=c(Search_Drug_Name[lid]),V2=c("β-受体阻滞剂"),V3=c(Match_Data$C1),V4=c(Comment2_Text),stringsAsFactors = FALSE)
+        Drug_Table_Info<-rbind(Drug_Table_Info,Drug_TmpTable)
+      }
+    }
+  }else if (Search_Drug_Name[lid]=="阿替洛尔") {
+    TMP_DATA<-Total_Drug_Chinese[Search_Drug_Name[lid]==Total_Drug_Chinese$Drug,]
+    Gene2_Call<-Sample_Info[grep("rs1801253",Sample_Info$`NCBI SNP Reference`),]$Call
+    Gene2_Call<-gsub("/","",Gene2_Call)
+    Gene2_Call_List<-unlist(strsplit(Gene2_Call,split=""))
+    Gene2_Call_Ver<-paste(Gene2_Call_List[2],Gene2_Call_List[1],sep="")
+    print(Search_Drug_Name[lid])
+    if (length(Gene2_Call)>0&length(Gene1_Phenotype)>0) {
+      Match_Data<-TMP_DATA[which(Gene2_Call==TMP_DATA$Gene1|Gene2_Call_Ver==TMP_DATA$Gene1),]
+      if (Match_Data$Flag==1) {
+        YaoWu_Data<-c(YaoWu_Data,Match_Data$Drug)
+      }
+      else if (Match_Data$Flag==2) {
+        BiaoZhun_Data<-c(BiaoZhun_Data,Match_Data$Drug)
+      }
+      if (Search_Drug_Name[lid] %in% Drug_Type$`β-受体阻滞剂`) {
+        Comment2_Text<-Text_Paste(Match_Data)
+        #Drug_TmpTable<-data.frame(V1=c(Search_Drug_Name[lid]),V2=c("β-受体阻滞剂"),V3=c(Match_Data$C1),V4=c(Match_Data$C2),stringsAsFactors = FALSE)
+        Drug_TmpTable<-data.frame(V1=c(Search_Drug_Name[lid]),V2=c("β-受体阻滞剂"),V3=c(Match_Data$C1),V4=c(Comment2_Text),stringsAsFactors = FALSE)
+        Drug_Table_Info<-rbind(Drug_Table_Info,Drug_TmpTable)
+      }
+    }
+  }else if (Search_Drug_Name[lid]=="ACE抑制剂") {
+    #'BDKRB2','PTGER3'
+    TMP_DATA<-Total_Drug_Chinese[Search_Drug_Name[lid]==Total_Drug_Chinese$Drug,]
+    Gene1_Call<-Sample_Info[grep("BDKRB2",Sample_Info$`Gene Symbol`),]$Call
+    Gene1_Call<-gsub("/","",Gene1_Call)
+    Gene1_Call_List<-unlist(strsplit(Gene1_Call,split=""))
+    Gene1_Call_Ver<-paste(Gene1_Call_List[2],Gene1_Call_List[1],sep="")
+    Gene2_Call<-Sample_Info[grep("PTGER3",Sample_Info$`Gene Symbol`),]$Call
+    Gene2_Call<-gsub("/","",Gene2_Call)
+    Gene2_Call_List<-unlist(strsplit(Gene2_Call,split=""))
+    Gene2_Call_Ver<-paste(Gene2_Call_List[2],Gene2_Call_List[1],sep="")
+    print(Search_Drug_Name[lid])
+    if (length(Gene1_Call)>0&length(Gene2_Call)>0) {
+      Match_Data<-TMP_DATA[which((Gene1_Call==TMP_DATA$Gene1|Gene1_Call_Ver==TMP_DATA$Gene1)&(Gene2_Call==TMP_DATA$Gene2|Gene2_Call_Ver==TMP_DATA$Gene2)),]
+      if (Match_Data$FXout=="是") {
+        FengXian_Data<-c(FengXian_Data,"ACEI相关性咳嗽")
+      }
+      if (Search_Drug_Name[lid] %in% Drug_Type$`ACE抑制剂`) {
+        Comment2_Text<-Text_Paste(Match_Data)
+        #Drug_TmpTable<-data.frame(V1=c(Search_Drug_Name[lid]),V2=c("ACE抑制剂"),V3=c(Match_Data$C1),V4=c(Match_Data$C2),stringsAsFactors = FALSE)
+        Drug_TmpTable<-data.frame(V1=c(Search_Drug_Name[lid]),V2=c("ACE抑制剂"),V3=c(Match_Data$C1),V4=c(Comment2_Text),stringsAsFactors = FALSE)
+        Drug_Table_Info<-rbind(Drug_Table_Info,Drug_TmpTable)
+      }
+    }
+  }else if (Search_Drug_Name[lid]=="贝那普利 咪达普利") {
+    #"rs5051" "BDKRB2" "PTGER3"
+    TMP_DATA<-Total_Drug_Chinese[Search_Drug_Name[lid]==Total_Drug_Chinese$Drug,]
+    Gene1_Call<-Sample_Info[grep("rs5051",Sample_Info$`NCBI SNP Reference`),]$Call
+    Gene1_Call<-gsub("/","",Gene1_Call)
+    Gene1_Call_List<-unlist(strsplit(Gene1_Call,split=""))
+    Gene1_Call_Ver<-paste(Gene1_Call_List[2],Gene1_Call_List[1],sep="")
+    Gene2_Call<-Sample_Info[grep("BDKRB2",Sample_Info$`Gene Symbol`),]$Call
+    Gene2_Call<-gsub("/","",Gene2_Call)
+    Gene2_Call_List<-unlist(strsplit(Gene2_Call,split=""))
+    Gene2_Call_Ver<-paste(Gene2_Call_List[2],Gene2_Call_List[1],sep="")
+    Gene3_Call<-Sample_Info[grep("PTGER3",Sample_Info$`Gene Symbol`),]$Call
+    Gene3_Call<-gsub("/","",Gene3_Call)
+    Gene3_Call_List<-unlist(strsplit(Gene3_Call,split=""))
+    Gene3_Call_Ver<-paste(Gene3_Call_List[2],Gene3_Call_List[1],sep="")
+    print(Search_Drug_Name[lid])
+    if (length(Gene1_Call)>0&length(Gene2_Call)&length(Gene3_Call)) {
+      if(Gene1_Call %in% c("TT","CT")) {
+        Match_Data<-TMP_DATA[which(Gene1_Call==TMP_DATA$Gene1|Gene1_Call_Ver==TMP_DATA$Gene1),]
+      }else{
+        Match_Data<-TMP_DATA[which((Gene1_Call==TMP_DATA$Gene1|Gene1_Call_Ver==TMP_DATA$Gene1)&(Gene2_Call==TMP_DATA$Gene2|Gene2_Call_Ver==TMP_DATA$Gene2)&(Gene3_Call==TMP_DATA$Gene3|Gene3_Call_Ver==TMP_DATA$Gene3)),]
+      }
+      if(dim(Match_Data)[1]==1&Match_Data$Flag==1) {
+        YaoWu_Data<-c(YaoWu_Data,Match_Data$Drug)
+      }else if (dim(Match_Data)[1]==1&Match_Data$Flag==2) {
+        BiaoZhun_Data<-c(BiaoZhun_Data,Match_Data$Drug)
+      }
+      if (Search_Drug_Name[lid] %in% Drug_Type$`ACE抑制剂`) {
+        Comment2_Text<-Text_Paste(Match_Data)
+        #Drug_TmpTable<-data.frame(V1=c(Search_Drug_Name[lid]),V2=c("ACE抑制剂"),V3=c(Match_Data$C1),V4=c(Match_Data$C2),stringsAsFactors = FALSE)
+        Drug_TmpTable<-data.frame(V1=c(Search_Drug_Name[lid]),V2=c("ACE抑制剂"),V3=c(Match_Data$C1),V4=c(Comment2_Text),stringsAsFactors = FALSE)
+        Drug_Table_Info<-rbind(Drug_Table_Info,Drug_TmpTable)
+      }
+    }
+  }else if (Search_Drug_Name[lid]=="卡托普利 赖诺普利") {
+    #"rs699"  "BDKRB2" "PTGER3"
+    Total_Drug_Chinese$Drug<-gsub("，"," ",Total_Drug_Chinese$Drug)
+    TMP_DATA<-Total_Drug_Chinese[Search_Drug_Name[lid]==Total_Drug_Chinese$Drug,]
+    Gene1_Call<-Sample_Info[grep("rs699",Sample_Info$`NCBI SNP Reference`),]$Call
+    Gene1_Call<-gsub("/","",Gene1_Call)
+    Gene1_Call_List<-unlist(strsplit(Gene1_Call,split=""))
+    Gene1_Call_Ver<-paste(Gene1_Call_List[2],Gene1_Call_List[1],sep="")
+    Gene2_Call<-Sample_Info[grep("BDKRB2",Sample_Info$`Gene Symbol`),]$Call
+    Gene2_Call<-gsub("/","",Gene2_Call)
+    Gene2_Call_List<-unlist(strsplit(Gene2_Call,split=""))
+    Gene2_Call_Ver<-paste(Gene2_Call_List[2],Gene2_Call_List[1],sep="")
+    Gene3_Call<-Sample_Info[grep("PTGER3",Sample_Info$`Gene Symbol`),]$Call
+    Gene3_Call<-gsub("/","",Gene3_Call)
+    Gene3_Call_List<-unlist(strsplit(Gene3_Call,split=""))
+    Gene3_Call_Ver<-paste(Gene3_Call_List[2],Gene3_Call_List[1],sep="")
+    print(Search_Drug_Name[lid])
+    if (length(Gene1_Call)>0&length(Gene2_Call)>0&length(Gene3_Call)>0) {
+      Match_Data<-TMP_DATA[which((Gene1_Call==TMP_DATA$Gene1|Gene1_Call_Ver==TMP_DATA$Gene1)&(Gene2_Call==TMP_DATA$Gene2|Gene2_Call_Ver==TMP_DATA$Gene2)&(Gene3_Call==TMP_DATA$Gene3|Gene3_Call_Ver==TMP_DATA$Gene3)),]
+      if(dim(Match_Data)[1]==1&Match_Data$Flag==1) {
+        YaoWu_Data<-c(YaoWu_Data,Match_Data$Drug)
+      }else if (dim(Match_Data)[1]==1&Match_Data$Flag==2) {
+        BiaoZhun_Data<-c(BiaoZhun_Data,Match_Data$Drug)
+      }
+    }
+    if (Search_Drug_Name[lid] %in% Drug_Type$`ACE抑制剂`) {
+      Comment2_Text<-Text_Paste(Match_Data)
+      #Drug_TmpTable<-data.frame(V1=c(Search_Drug_Name[lid]),V2=c("ACE抑制剂"),V3=c(Match_Data$C1),V4=c(Match_Data$C2),stringsAsFactors = FALSE)
+      Drug_TmpTable<-data.frame(V1=c(Search_Drug_Name[lid]),V2=c("ACE抑制剂"),V3=c(Match_Data$C1),V4=c(Comment2_Text),stringsAsFactors = FALSE)
+      Drug_Table_Info<-rbind(Drug_Table_Info,Drug_TmpTable)
+    }
+  }else if (Search_Drug_Name[lid]=="依那普利") {
+    #"rs4149056" "rs699"     "BDKRB2"    "PTGER3"
+    TMP_DATA<-Total_Drug_Chinese[Search_Drug_Name[lid]==Total_Drug_Chinese$Drug,]
+    Gene0_Call<-Sample_Info[grep("rs4149056",Sample_Info$`NCBI SNP Reference`),]$Call
+    Gene0_Call<-gsub("/","",Gene0_Call)
+    Gene0_Call_List<-unlist(strsplit(Gene0_Call,split=""))
+    Gene0_Call_Ver<-paste(Gene0_Call_List[2],Gene0_Call_List[1],sep="")
+    Gene1_Call<-Sample_Info[grep("rs699",Sample_Info$`NCBI SNP Reference`),]$Call
+    Gene1_Call<-gsub("/","",Gene1_Call)
+    Gene1_Call_List<-unlist(strsplit(Gene1_Call,split=""))
+    Gene1_Call_Ver<-paste(Gene1_Call_List[2],Gene1_Call_List[1],sep="")
+    Gene2_Call<-Sample_Info[grep("BDKRB2",Sample_Info$`Gene Symbol`),]$Call
+    Gene2_Call<-gsub("/","",Gene2_Call)
+    Gene2_Call_List<-unlist(strsplit(Gene2_Call,split=""))
+    Gene2_Call_Ver<-paste(Gene2_Call_List[2],Gene2_Call_List[1],sep="")
+    Gene3_Call<-Sample_Info[grep("PTGER3",Sample_Info$`Gene Symbol`),]$Call
+    Gene3_Call<-gsub("/","",Gene3_Call)
+    Gene3_Call_List<-unlist(strsplit(Gene3_Call,split=""))
+    Gene3_Call_Ver<-paste(Gene3_Call_List[2],Gene3_Call_List[1],sep="")
+    print(Search_Drug_Name[lid])
+    if (length(Gene0_Call)==1&length(Gene1_Call)==1&length(Gene2_Call)==1&length(Gene3_Call)==1) {
+      if (Gene0_Call %in% c("CC","CT","TC")) {
+        Match_Data<-TMP_DATA[which((Gene0_Call==TMP_DATA$Gene1|Gene0_Call_Ver==TMP_DATA$Gene1)&(Gene1_Call==TMP_DATA$Gene2|Gene1_Call_Ver==TMP_DATA$Gene2)),]
+      }else{
+        Match_Data<-TMP_DATA[which((Gene0_Call==TMP_DATA$Gene1|Gene0_Call_Ver==TMP_DATA$Gene1)&(Gene1_Call==TMP_DATA$Gene2|Gene1_Call_Ver==TMP_DATA$Gene2)&(Gene2_Call==TMP_DATA$Gene3|Gene2_Call_Ver==TMP_DATA$Gene3)&(Gene3_Call==TMP_DATA$Gene4|Gene3_Call_Ver==TMP_DATA$Gene4)),]
+      }
+      if(dim(Match_Data)[1]>0){
+        if(Match_Data$Flag==1) {
+          YaoWu_Data<-c(YaoWu_Data,Match_Data$Drug)
+        }else if (Match_Data$Flag==2) {
+          BiaoZhun_Data<-c(BiaoZhun_Data,Match_Data$Drug)
+        }
+      }
+    }
+    if (Search_Drug_Name[lid] %in% Drug_Type$`ACE抑制剂`) {
+      if (dim(Match_Data)[1]>0) {
+        Comment2_Text<-Text_Paste(Match_Data)
+        #Drug_TmpTable<-data.frame(V1=c(Search_Drug_Name[lid]),V2=c("ACE抑制剂"),V3=c(Match_Data$C1),V4=c(Match_Data$C2),stringsAsFactors = FALSE)
+        Drug_TmpTable<-data.frame(V1=c(Search_Drug_Name[lid]),V2=c("ACE抑制剂"),V3=c(Match_Data$C1),V4=c(Comment2_Text),stringsAsFactors = FALSE)
+        Drug_Table_Info<-rbind(Drug_Table_Info,Drug_TmpTable)
+      }
+    }
+  }else if (Search_Drug_Name[lid]=="氯沙坦") {
+    #"CYP2C9" "ABCB1"
+    TMP_DATA<-Total_Drug_Chinese[Search_Drug_Name[lid]==Total_Drug_Chinese$Drug,]
+    Gene1_Call<-Sample_Info[grep("CYP2C9",Sample_Info$`Gene Symbol`),]$Call
+    Gene1_Call<-gsub("/","",Gene1_Call)
+    Gene1_diplotype<-unique(Sample_Info[grep("CYP2C9",Sample_Info$`Gene Symbol`),]$diplotype)
+    #Gene1_phenotype<-unique(Sample_Info[grep("CYP2C9",Sample_Info$`Gene Symbol`),]$phenotype)
+    Gene2_Call<-Sample_Info[grep("ABCB1",Sample_Info$`Gene Symbol`),]$Call
+    Gene2_Call<-gsub("/","",Gene2_Call)
+    Gene2_Call_List<-unlist(strsplit(Gene2_Call,split=""))
+    Gene2_Call_Ver<-paste(Gene2_Call_List[2],Gene2_Call_List[1],sep="")
+    print(Search_Drug_Name[lid])
+    if (length(Gene1_Call)>0&length(Gene2_Call)>0) {
+      Match_Data<-TMP_DATA[which(Gene1_diplotype==TMP_DATA$Gene1&(Gene2_Call==TMP_DATA$Gene2|Gene2_Call_Ver==TMP_DATA$Gene2)),]
+      if(dim(Match_Data)[1]>0){
+        if(Match_Data$Flag==1) {
+          YaoWu_Data<-c(YaoWu_Data,Match_Data$Drug)
+        }else if (Match_Data$Flag==2) {
+          BiaoZhun_Data<-c(BiaoZhun_Data,Match_Data$Drug)
+        }
+      }
+    }
+    if (Search_Drug_Name[lid] %in% Drug_Type$`ARB血管紧张素Ⅱ受体阻滞剂`) {
+      Comment2_Text<-Text_Paste(Match_Data)
+      #Drug_TmpTable<-data.frame(V1=c(Search_Drug_Name[lid]),V2=c("ARB血管紧张素Ⅱ受体阻滞剂"),V3=c(Match_Data$C1),V4=c(Match_Data$C2),stringsAsFactors = FALSE)
+      Drug_TmpTable<-data.frame(V1=c(Search_Drug_Name[lid]),V2=c("ARB血管紧张素Ⅱ受体阻滞剂"),V3=c(Match_Data$C1),V4=c(Comment2_Text),stringsAsFactors = FALSE)
+      Drug_Table_Info<-rbind(Drug_Table_Info,Drug_TmpTable)
+    }
+  }else if (Search_Drug_Name[lid]=="厄贝沙坦") {
+    #"CYP2C9"
+    TMP_DATA<-Total_Drug_Chinese[Search_Drug_Name[lid]==Total_Drug_Chinese$Drug,]
+    Gene1_Call<-Sample_Info[grep("CYP2C9",Sample_Info$`Gene Symbol`),]$Call
+    Gene1_Call<-gsub("/","",Gene1_Call)
+    Gene1_diplotype<-unique(Sample_Info[grep("CYP2C9",Sample_Info$`Gene Symbol`),]$diplotype)
+    print(Search_Drug_Name[lid])
+    if (length(Gene1_Call)>0) {
+      Match_Data<-TMP_DATA[which(Gene1_diplotype==TMP_DATA$Gene1),]
+      if(dim(Match_Data)[1]>0){
+        if(Match_Data$Flag==1) {
+          YaoWu_Data<-c(YaoWu_Data,Match_Data$Drug)
+        }else if (Match_Data$Flag==2) {
+          BiaoZhun_Data<-c(BiaoZhun_Data,Match_Data$Drug)
+        }
+      }
+    }
+    if (Search_Drug_Name[lid] %in% Drug_Type$`ARB血管紧张素Ⅱ受体阻滞剂`) {
+      Comment2_Text<-Text_Paste(Match_Data)
+      #Drug_TmpTable<-data.frame(V1=c(Search_Drug_Name[lid]),V2=c("ARB血管紧张素Ⅱ受体阻滞剂"),V3=c(Match_Data$C1),V4=c(Match_Data$C2),stringsAsFactors = FALSE)
+      Drug_TmpTable<-data.frame(V1=c(Search_Drug_Name[lid]),V2=c("ARB血管紧张素Ⅱ受体阻滞剂"),V3=c(Match_Data$C1),V4=c(Comment2_Text),stringsAsFactors = FALSE)
+      Drug_Table_Info<-rbind(Drug_Table_Info,Drug_TmpTable)
+    }
+  }else if (Search_Drug_Name[lid]=="坎地沙坦") {
+    #"AGTR1"
+    TMP_DATA<-Total_Drug_Chinese[Search_Drug_Name[lid]==Total_Drug_Chinese$Drug,]
+    Gene1_Call<-Sample_Info[grep("AGTR1",Sample_Info$`Gene Symbol`),]$Call
+    Gene1_Call<-gsub("/","",Gene1_Call)
+    Gene1_Call_List<-unlist(strsplit(Gene1_Call,split=""))
+    Gene1_Call_Ver<-paste(Gene1_Call_List[2],Gene1_Call_List[1],sep="")
+    print(Search_Drug_Name[lid])
+    if (length(Gene1_Call)>0) {
+      Match_Data<-TMP_DATA[which(Gene1_Call==TMP_DATA$Gene1|Gene1_Call_Ver==TMP_DATA$Gene1),]
+      if(dim(Match_Data)[1]>0){
+        if(Match_Data$Flag==1) {
+          YaoWu_Data<-c(YaoWu_Data,Match_Data$Drug)
+        }else if (Match_Data$Flag==2) {
+          BiaoZhun_Data<-c(BiaoZhun_Data,Match_Data$Drug)
+        }
+      }
+    }
+    if (Search_Drug_Name[lid] %in% Drug_Type$`ARB血管紧张素Ⅱ受体阻滞剂`) {
+      Comment2_Text<-Text_Paste(Match_Data)
+      #Drug_TmpTable<-data.frame(V1=c(Search_Drug_Name[lid]),V2=c("ARB血管紧张素Ⅱ受体阻滞剂"),V3=c(Match_Data$C1),V4=c(Match_Data$C2),stringsAsFactors = FALSE)
+      Drug_TmpTable<-data.frame(V1=c(Search_Drug_Name[lid]),V2=c("ARB血管紧张素Ⅱ受体阻滞剂"),V3=c(Match_Data$C1),V4=c(Comment2_Text),stringsAsFactors = FALSE)
+      Drug_Table_Info<-rbind(Drug_Table_Info,Drug_TmpTable)
+    }
+  }else if (Search_Drug_Name[lid]=="钙通道阻滞剂") {
+    #"rs2238032"
+    TMP_DATA<-Total_Drug_Chinese[Search_Drug_Name[lid]==Total_Drug_Chinese$Drug,]
+    Gene1_Call<-Sample_Info[grep("rs2238032",Sample_Info$`NCBI SNP Reference`),]$Call
+    Gene1_Call<-gsub("/","",Gene1_Call)
+    Gene1_Call_List<-unlist(strsplit(Gene1_Call,split=""))
+    Gene1_Call_Ver<-paste(Gene1_Call_List[2],Gene1_Call_List[1],sep="")
+    print(Search_Drug_Name[lid])
+    if (length(Gene1_Call)>0) {
+      Match_Data<-TMP_DATA[which(Gene1_Call==TMP_DATA$Gene1|Gene1_Call_Ver==TMP_DATA$Gene1),]
+    }
+    if (Search_Drug_Name[lid] %in% Drug_Type$`钙通道阻滞剂`) {
+      Comment2_Text<-Text_Paste(Match_Data)
+      #Drug_TmpTable<-data.frame(V1=c(Search_Drug_Name[lid]),V2=c("钙通道阻滞剂"),V3=c(Match_Data$C1),V4=c(Match_Data$C2),stringsAsFactors = FALSE)
+      Drug_TmpTable<-data.frame(V1=c(Search_Drug_Name[lid]),V2=c("钙通道阻滞剂"),V3=c(Match_Data$C1),V4=c(Comment2_Text),stringsAsFactors = FALSE)
+      Drug_Table_Info<-rbind(Drug_Table_Info,Drug_TmpTable)
+    }
+  }else if (Search_Drug_Name[lid]=="氨氯地平") {
+    #rs776746
+    TMP_DATA<-Total_Drug_Chinese[Search_Drug_Name[lid]==Total_Drug_Chinese$Drug,]
+    Gene1_Call<-Sample_Info[grep("rs2238032",Sample_Info$`NCBI SNP Reference`),]$Call
+    Gene1_Call<-gsub("/","",Gene1_Call)
+    Gene1_Call_List<-unlist(strsplit(Gene1_Call,split=""))
+    Gene1_Call_Ver<-paste(Gene1_Call_List[2],Gene1_Call_List[1],sep="")
+    Call_Set<-TMP_DATA$Gene1[2:dim(TMP_DATA)[1]]
+    print(Search_Drug_Name[lid])
+    if (length(Gene1_Call)>0) {
+      if (Gene1_Call %in% Call_Set) {
+        Match_Data<-TMP_DATA[which(Gene1_Call==TMP_DATA$Gene1|Gene1_Call_Ver==TMP_DATA$Gene1),]
+        if(Match_Data$Flag==1) {
+          YaoWu_Data<-c(YaoWu_Data,Match_Data$Drug)
+        }else if (Match_Data$Flag==2) {
+          BiaoZhun_Data<-c(BiaoZhun_Data,Match_Data$Drug)
+        }
+      }
+    }
+    if (Search_Drug_Name[lid] %in% Drug_Type$`钙通道阻滞剂`) {
+      Comment2_Text<-Text_Paste(Match_Data)
+      #Drug_TmpTable<-data.frame(V1=c(Search_Drug_Name[lid]),V2=c("钙通道阻滞剂"),V3=c(Match_Data$C1),V4=c(Match_Data$C2),stringsAsFactors = FALSE)
+      Drug_TmpTable<-data.frame(V1=c(Search_Drug_Name[lid]),V2=c("钙通道阻滞剂"),V3=c(Match_Data$C1),V4=c(Comment2_Text),stringsAsFactors = FALSE)
+      Drug_Table_Info<-rbind(Drug_Table_Info,Drug_TmpTable)
+    }
+  }else if (Search_Drug_Name[lid]=="硝苯地平") {
+    #rs776746
+    TMP_DATA<-Total_Drug_Chinese[Search_Drug_Name[lid]==Total_Drug_Chinese$Drug,]
+    Gene1_Call<-Sample_Info[grep("rs2238032",Sample_Info$`NCBI SNP Reference`),]$Call
+    Gene1_Call<-gsub("/","",Gene1_Call)
+    Call_Set<-TMP_DATA$Gene1[2:dim(TMP_DATA)[1]]
+    print(Search_Drug_Name[lid])
+    if (length(Gene1_Call)>0) {
+      if (Gene1_Call %in% Call_Set) {
+        Match_Data<-TMP_DATA[which(Gene1_Call==TMP_DATA$Gene1),]
+        if(Match_Data$Flag==1) {
+          YaoWu_Data<-c(YaoWu_Data,Match_Data$Drug)
+        }else if (Match_Data$Flag==2) {
+          BiaoZhun_Data<-c(BiaoZhun_Data,Match_Data$Drug)
+        }
+      }
+    }
+    if (Search_Drug_Name[lid] %in% Drug_Type$`钙通道阻滞剂`) {
+      Comment2_Text<-Text_Paste(Match_Data)
+      #Drug_TmpTable<-data.frame(V1=c(Search_Drug_Name[lid]),V2=c("钙通道阻滞剂"),V3=c(Match_Data$C1),V4=c(Match_Data$C2),stringsAsFactors = FALSE)
+      Drug_TmpTable<-data.frame(V1=c(Search_Drug_Name[lid]),V2=c("钙通道阻滞剂"),V3=c(Match_Data$C1),V4=c(Comment2_Text),stringsAsFactors = FALSE)
+      Drug_Table_Info<-rbind(Drug_Table_Info,Drug_TmpTable)
+    }
+  }else if (Search_Drug_Name[lid]=="维拉帕米") {
+    #"CACNA1C" "ABCB1"
+    TMP_DATA<-Total_Drug_Chinese[Search_Drug_Name[lid]==Total_Drug_Chinese$Drug,]
+    Gene1_Call<-Sample_Info[("CACNA1C"==Sample_Info$`Gene Symbol`)&("rs2238032"!=Sample_Info$`NCBI SNP Reference`),]$Call
+    Gene1_Call<-gsub("/","",Gene1_Call)
+    Gene1_CallSet<-TMP_DATA$Gene1[2:dim(TMP_DATA)[1]]
+    Gene2_Call<-Sample_Info[grep("ABCB1",Sample_Info$`Gene Symbol`),]$Call
+    Gene2_Call<-gsub("/","",Gene2_Call)
+    Gene2_CallSet<-TMP_DATA$Gene2[2:dim(TMP_DATA)[1]]
+    print(Search_Drug_Name[lid])
+    if ((Gene1_Call %in% Gene1_CallSet)&(Gene2_Call %in% Gene2_CallSet)) {
+      Match_Data<-TMP_DATA[which(Gene1_Call==TMP_DATA$Gene1&Gene2_Call==TMP_DATA$Gene2),]
+      if(Match_Data$Flag==1) {
+        YaoWu_Data<-c(YaoWu_Data,Match_Data$Drug)
+      }else if (Match_Data$Flag==2) {
+        BiaoZhun_Data<-c(BiaoZhun_Data,Match_Data$Drug)
+      }
+    }
+    if (Search_Drug_Name[lid] %in% Drug_Type$`钙通道阻滞剂`) {
+      Comment2_Text<-Text_Paste(Match_Data)
+      #Drug_TmpTable<-data.frame(V1=c(Search_Drug_Name[lid]),V2=c("钙通道阻滞剂"),V3=c(Match_Data$C1),V4=c(Match_Data$C2),stringsAsFactors = FALSE)
+      Drug_TmpTable<-data.frame(V1=c(Search_Drug_Name[lid]),V2=c("钙通道阻滞剂"),V3=c(Match_Data$C1),V4=c(Comment2_Text),stringsAsFactors = FALSE)
+      Drug_Table_Info<-rbind(Drug_Table_Info,Drug_TmpTable)
+    }
+  }else if (Search_Drug_Name[lid]=="氢氯噻嗪") {
+    #"NEDD4L" "KCNJ1"
+    TMP_DATA<-Total_Drug_Chinese[Search_Drug_Name[lid]==Total_Drug_Chinese$Drug,]
+    Gene1_Call<-Sample_Info[grep("NEDD4L",Sample_Info$`Gene Symbol`),]$Call
+    Gene1_Call<-gsub("/","",Gene1_Call)
+    Gene1_CallSet<-unique(TMP_DATA$Gene1[2:dim(TMP_DATA)[1]])
+    Gene2_Call<-Sample_Info[grep("KCNJ1",Sample_Info$`Gene Symbol`),]$Call
+    Gene2_Call<-gsub("/","",Gene2_Call)
+    Gene2_CallSet<-unique(TMP_DATA$Gene2[2:dim(TMP_DATA)[1]])
+    print(Search_Drug_Name[lid])
+    if ((Gene1_Call %in% Gene1_CallSet)&(Gene2_Call %in% Gene2_CallSet)) {
+      Match_Data<-TMP_DATA[which(Gene1_Call==TMP_DATA$Gene1&Gene2_Call==TMP_DATA$Gene2),]
+      if(Match_Data$Flag==1) {
+        YaoWu_Data<-c(YaoWu_Data,Match_Data$Drug)
+      }else if (Match_Data$Flag==2) {
+        BiaoZhun_Data<-c(BiaoZhun_Data,Match_Data$Drug)
+      }
+      if (Match_Data$FXout=="是") {
+        FengXian_Data<-c(FengXian_Data,"HCTZ相关性血糖异常及NOD")
+      }
+    }
+    if (Search_Drug_Name[lid] %in% Drug_Type$`利尿剂`) {
+      Comment2_Text<-Text_Paste(Match_Data)
+      #Drug_TmpTable<-data.frame(V1=c(Search_Drug_Name[lid]),V2=c("利尿剂"),V3=c(Match_Data$C1),V4=c(Match_Data$C2),stringsAsFactors = FALSE)
+      Drug_TmpTable<-data.frame(V1=c(Search_Drug_Name[lid]),V2=c("利尿剂"),V3=c(Match_Data$C1),V4=c(Comment2_Text),stringsAsFactors = FALSE)
+      Drug_Table_Info<-rbind(Drug_Table_Info,Drug_TmpTable)
+    }
+  }else if (Search_Drug_Name[lid]=="螺内酯") {
+    #"ADD1"
+    TMP_DATA<-Total_Drug_Chinese[Search_Drug_Name[lid]==Total_Drug_Chinese$Drug,]
+    Gene1_Call<-Sample_Info[grep("ADD1",Sample_Info$`Gene Symbol`),]$Call
+    Gene1_Call<-gsub("/","",Gene1_Call)
+    Gene1_CallSet<-unique(TMP_DATA$Gene1[2:dim(TMP_DATA)[1]])
+    print(Search_Drug_Name[lid])
+    if (Gene1_Call %in% Gene1_CallSet) {
+      Match_Data<-TMP_DATA[which(Gene1_Call==TMP_DATA$Gene1),]
+      if(Match_Data$Flag==1) {
+        YaoWu_Data<-c(YaoWu_Data,Match_Data$Drug)
+      }else if (Match_Data$Flag==2) {
+        BiaoZhun_Data<-c(BiaoZhun_Data,Match_Data$Drug)
+      }
+    }
+    if (Search_Drug_Name[lid] %in% Drug_Type$`利尿剂`) {
+      Comment2_Text<-Text_Paste(Match_Data)
+      #Drug_TmpTable<-data.frame(V1=c(Search_Drug_Name[lid]),V2=c("利尿剂"),V3=c(Match_Data$C1),V4=c(Match_Data$C2),stringsAsFactors = FALSE)
+      Drug_TmpTable<-data.frame(V1=c(Search_Drug_Name[lid]),V2=c("利尿剂"),V3=c(Match_Data$C1),V4=c(Comment2_Text),stringsAsFactors = FALSE)
+      Drug_Table_Info<-rbind(Drug_Table_Info,Drug_TmpTable)
+    }
+  }else if (Search_Drug_Name[lid]=="氯噻酮") {
+    #"ACE"
+    TMP_DATA<-Total_Drug_Chinese[Search_Drug_Name[lid]==Total_Drug_Chinese$Drug,]
+    Gene1_Call<-Sample_Info[grep("ACE",Sample_Info$`Gene Symbol`),]$Call
+    Gene1_Call<-gsub("/","",Gene1_Call)
+    Gene1_CallSet<-unique(TMP_DATA$Gene1[2:dim(TMP_DATA)[1]])
+    print(Search_Drug_Name[lid])
+    if (Gene1_Call %in% Gene1_CallSet) {
+      Match_Data<-TMP_DATA[which(Gene1_Call==TMP_DATA$Gene1),]
+      if(Match_Data$Flag==1) {
+        YaoWu_Data<-c(YaoWu_Data,Match_Data$Drug)
+      }else if (Match_Data$Flag==2) {
+        BiaoZhun_Data<-c(BiaoZhun_Data,Match_Data$Drug)
+      }
+      if ((!is.na(Match_Data$FXout))&(Match_Data$FXout=="是")) {
+        FengXian_Data<-c(FengXian_Data,"HCTZ相关性血糖异常及NOD")
+      }
+    }
+    if (Search_Drug_Name[lid] %in% Drug_Type$`利尿剂`) {
+      Comment2_Text<-Text_Paste(Match_Data)
+      #Drug_TmpTable<-data.frame(V1=c(Search_Drug_Name[lid]),V2=c("利尿剂"),V3=c(Match_Data$C1),V4=c(Match_Data$C2),stringsAsFactors = FALSE)
+      Drug_TmpTable<-data.frame(V1=c(Search_Drug_Name[lid]),V2=c("利尿剂"),V3=c(Match_Data$C1),V4=c(Comment2_Text),stringsAsFactors = FALSE)
+      Drug_Table_Info<-rbind(Drug_Table_Info,Drug_TmpTable)
+    }
+  }else if (Search_Drug_Name[lid]=="叶酸") {
+    #"rs1801133"
+    TMP_DATA<-Total_Drug_Chinese[Search_Drug_Name[lid]==Total_Drug_Chinese$Drug,]
+    Gene1_Call<-Sample_Info[grep("rs1801133",Sample_Info$`NCBI SNP Reference`),]$Call
+    Gene1_Call<-gsub("/","",Gene1_Call)
+    Call_Set<-unique(TMP_DATA$Gene1[2:dim(TMP_DATA)[1]])
+    print(Search_Drug_Name[lid])
+    if (Gene1_Call %in% Gene1_CallSet) {
+      Match_Data<-TMP_DATA[which(Gene1_Call==TMP_DATA$Gene1),]
+      if ((!is.na(Match_Data$FXout))&(Match_Data$FXout=="是")) {
+        FengXian_Data<-c(FengXian_Data,"高半胱氨酸血症")
+      }
+    }
+    if (Search_Drug_Name[lid] %in% Drug_Type$`辅助用药`) {
+      Comment2_Text<-Text_Paste(Match_Data)
+      #Drug_TmpTable<-data.frame(V1=c(Search_Drug_Name[lid]),V2=c("辅助用药"),V3=c(Match_Data$C1),V4=c(Match_Data$C2),stringsAsFactors = FALSE)
+      Drug_TmpTable<-data.frame(V1=c(Search_Drug_Name[lid]),V2=c("辅助用药"),V3=c(Match_Data$C1),V4=c(Comment2_Text),stringsAsFactors = FALSE)
+      Drug_Table_Info<-rbind(Drug_Table_Info,Drug_TmpTable)
+    }
+  }
+}
+colnames(Drug_Table_Info)<-c("Drug","Type","Comment1","Comment2")
+
+Combine_Vector<-function(Data){
+  if(length(Data)>2){
+    Vector_Str<-paste(Data[1],Data[2],sep="，")
+    for (i in seq.int(from = 3,to=length(Data))) {
+      Vector_Str<-paste(Vector_Str,Data[i],sep="，")
+    }
+  }else{
+    Vector_Str<-paste(Data[1],Data[2],sep="，")
+  }
+  return(Vector_Str)
+}
+YaoWu_Data<-unlist(strsplit(YaoWu_Data,split = " "))
+BiaoZhun_Data<-unlist(strsplit(BiaoZhun_Data,split = " "))
+Table0<-data.frame(V1=c("需考虑药物基因组学影响","标准处方推荐"),V2=c(Combine_Vector(YaoWu_Data),Combine_Vector(BiaoZhun_Data)))
+Table1<-data.frame(V1=rep("风险提示",length(FengXian_Data)),V2=FengXian_Data)
+Table_Summary<-rbind(Table0,Table1)
+
+##################################Drug Information Ending########################
+Table_Generate<-function(YaoWu_Data,BiaoZhun_Data,FengXian_Data){
+  YW_TEXT<-"需考虑药物基因组学影响"
+  BZ_TEXT<-"标准处方推荐"
+  FX_TEXT<-"风险提示"
+  if(length(BiaoZhun_Data)>2){
+    BiaoZhun_Element<-c(BiaoZhun_Data,rep("",ceiling(length(BiaoZhun_Data)/2)*2-length(BiaoZhun_Data)))
+    BZRNum<-ceiling(length(BiaoZhun_Data)/2)
+  }else{
+    BiaoZhun_Element<-c(BiaoZhun_Data,rep("",ceiling(length(BiaoZhun_Data)/2)*2-length(BiaoZhun_Data)))
+    BZRNum<-1
+  }
+  RowNum_BZFX<-BZRNum+length(FengXian_Data)+2
+  ColNum_YW<-ceiling(length(YaoWu_Data)/(RowNum_BZFX-1))
+  YaoWu_Element<-c(YaoWu_Data,rep("",ColNum_YW*(RowNum_BZFX-1)-length(YaoWu_Data)))
+  YaoWu_DF<-as.data.frame(matrix(c(YaoWu_Element),nrow=(RowNum_BZFX-1),byrow=TRUE),stringsAsFactors=FALSE)
+  colnames(YaoWu_DF)<-c(YW_TEXT,paste("Y",seq(ColNum_YW-1)))
+  BiaoZhun_DF<-as.data.frame(matrix(c(BiaoZhun_Element),ncol=2,byrow=TRUE),stringsAsFactors=FALSE)
+  colnames(BiaoZhun_DF)<-c("V1","V2")
+  FengXian_DF<-as.data.frame(matrix(c(FX_TEXT,FengXian_Data),nrow=(length(FengXian_Data)+1),byrow=FALSE),stringsAsFactors=FALSE)
+  colnames(FengXian_DF)<-c("V1")
+  FengXian_DF$V2<-rep("",dim(FengXian_DF)[1])#FengXian_DF$V1
+  BZFX_DF<-rbind(BiaoZhun_DF,FengXian_DF)
+  colnames(BZFX_DF)<-c(BZ_TEXT,"B2")
+  Table0<-cbind(YaoWu_DF,BZFX_DF)
+  return(Table0)
+}
+
+Summary_Table_Print0<-function(data){
+  YW_TEXT<-"需考虑药物基因组学影响"
+  BZ_TEXT<-"标准处方推荐"
+  FX_TEXT<-"风险提示"
+  COLNum_YW<-dim(data)[2]-2
+  COLNum_BZ<-COLNum_YW+1
+  Each_Cell_Len<-7.1/dim(data)[2]
+  ROWNum_FX<-which(data[,COLNum_BZ]==FX_TEXT)
+  #typology<-data.frame(col_keys=colnames(data),Change=c(rep(YW_TEXT,COLNum_YW),rep(BZ_TEXT,2)),stringsAsFactors=FALSE)
+  ft<-flextable(data)%>%
+  #ft<-set_header_df(ft,mapping=typology,key="col_keys")%>%
+  #  merge_h(part="header")%>%
+  #delete_part(part='header') %>% #border_remove()%>%
+  align(align = 'left',part='all') %>%
+  width(j=1:COLNum_YW,width = Each_Cell_Len)%>%
+  width(j=COLNum_BZ:dim(data)[2],width=Each_Cell_Len)%>%
+  flextable::compose(i=1,j=1, value=as_paragraph(as_image(src=list.files(getwd(), 'YellowGanTan.png', full.names = T), width=.20, height=.20),"","需考虑药物基因组学影响"),part='header') %>%
+  flextable::compose(i=1,j=COLNum_BZ, value=as_paragraph(as_image(src=list.files(getwd(), 'GreenCycle.png', full.names = T), width=.20, height=.20),"","标准处方推荐"), part='header') %>%
+  flextable::compose(i=ROWNum_FX,j=COLNum_BZ, value=as_paragraph(as_image(src=list.files(getwd(), 'RedGanTan.png', full.names =T), width=.20, height=.20),"","风险提示"), part='body')%>% 
+  style(pr_t=fp_text(font.size=11,font.family="SimSun"))%>%
+  style(i=1,j=1,pr_t=fp_text(color="#2F5496"),part="header")%>%
+  style(i=1,j=COLNum_BZ,pr_t=fp_text(color="#2F5496"),part="header")%>%
+  style(i=ROWNum_FX,j=COLNum_BZ,pr_t=fp_text(color="#2F5496"),part="body")%>%
+  merge_at(i=1,j=1:COLNum_YW,part='header')%>%
+  merge_at(i=1,j=COLNum_BZ:dim(data)[2],part='header')
+  for(RN in seq.int(from=ROWNum_FX,to=dim(data)[1])){
+    ft<-merge_at(ft,i=RN,j=(COLNum_BZ:dim(data)[2]),part='body')
+  }
+  #merge_h(part="body")
+  ft<-vline(ft,j=COLNum_YW,border = fp_border(),part='all')%>%
+    vline(j=(dim(data)[2]-1),border = fp_border(),part='header')
+  for(Ri in seq.int(from=ROWNum_FX,to=dim(data)[1])){
+    ft<-vline(ft,i=Ri,j=(dim(data)[2]-1),border = fp_border(),part='body')
+  }
+  ft<-border_outer(ft,border=fp_border(),part='all')%>%
+    padding(padding = 2, part = 'body')
+  return(ft)
+}
+#border_remove()%>%#align(j=1, align = 'left') %>%#1.7#5
+#bg(j=1,bg='#A4C7F1', part='body')%>%
+Summary_Table_Print<-function(data){
+  ft<-flextable(data)%>%
+    border_outer(border=fp_border())%>%
+    align(align = 'left',part='all') %>%
+    width(j=1,width=1.8)%>%
+    width(j=2,width=5.3)%>%
+    merge_v(j=1,part='body')%>%
+    flextable::compose(i=1,j=1, value=as_paragraph(as_image(src=list.files(getwd(), 'YellowGanTan.png', full.names = T), width=.20, height=.20),"",V1),part='body')%>%
+    flextable::compose(i=2,j=1, value=as_paragraph(as_image(src=list.files(getwd(), 'GreenCycle.png', full.names = T), width=.20, height=.20),"",V1), part='body')%>%
+    flextable::compose(i=3,j=1, value=as_paragraph(as_image(src=list.files(getwd(), 'RedGanTan.png', full.names =T), width=.20, height=.20),"",V1), part='body')%>% 
+    style(j=1,pr_t=fp_text(color="#2F5496",font.size=11,font.family="SimSun"))%>%
+    hline(i=1,border=fp_border())%>%
+    hline(i=2,border=fp_border())%>%
+    hline(i=4,border=fp_border())%>%
+    delete_part(part='header')%>% 
+    #FitFlextableToPage() %>%#font(,fontname="")#style(font.size,font.family)
+    padding(padding = 2, part = 'body')
+  return(ft)
+}
+
+#Table2<-read_excel("Drug_Summary_Table.xlsx")
+#Table2<-as.data.frame(Table2)
+Drug_Category_Order<-c("β-受体阻滞剂","ACE抑制剂","ARB血管紧张素Ⅱ受体阻滞剂","利尿剂","钙通道阻滞剂","辅助用药")
+#Drug_Uniq<-unique(Table2$药物)
+
+Generate_DrugTable<-function(Table){
+  Drug_Table<-data.frame(stringsAsFactors = FALSE)
+  RB_Num<-0
+  ACE_Num<-0
+  ARBs_Num<-0
+  CCB_Num<-0
+  DIU_Num<-0
+  AdDrug_Num<-0  
+  for (i in seq(dim(Table)[1])) {
+    #print(drug)
+    if(Table[i,]$Type=="β-受体阻滞剂"){
+      RB_Num<-RB_Num+1
+      if(RB_Num==1) {
+        TMP_Category<-data.frame(V1=Table[i,]$Type,V2="",stringsAsFactors = FALSE)
+        Drug_Table<-rbind(Drug_Table,TMP_Category)
+      }
+    }
+    else if(Table[i,]$Type=="ACE抑制剂"){
+      ACE_Num<-ACE_Num+1
+      if(ACE_Num==1){
+        TMP_Category<-data.frame(V1=paste(Table[i,]$Type,"label",sep=""),V2="",stringsAsFactors = FALSE)
+        Drug_Table<-rbind(Drug_Table,TMP_Category)
+      }
+    }
+    else if(Table[i,]$Type=="ARB血管紧张素Ⅱ受体阻滞剂") {
+      ARBs_Num<-ARBs_Num+1
+      if(ARBs_Num==1){
+        TMP_Category<-data.frame(V1=Table[i,]$Type,V2="",stringsAsFactors = FALSE)
+        Drug_Table<-rbind(Drug_Table,TMP_Category)
+      }
+    }
+    else if (Table[i,]$Type=="利尿剂") {
+      DIU_Num<-DIU_Num+1
+      if(DIU_Num==1) {
+        TMP_Category<-data.frame(V1=Table[i,]$Type,V2="",stringsAsFactors = FALSE)
+        Drug_Table<-rbind(Drug_Table,TMP_Category)
+      }
+    }
+    else if(Table[i,]$Type=="钙通道阻滞剂"){
+      CCB_Num<-CCB_Num+1
+      if (CCB_Num==1) {
+        TMP_Category<-data.frame(V1=paste(Table[i,]$Type,"label",sep=""),V2="",stringsAsFactors = FALSE)
+        Drug_Table<-rbind(Drug_Table,TMP_Category)
+      }
+    }
+    else if(Table[i,]$Type=="辅助用药") {
+      AdDrug_Num<-AdDrug_Num+1
+      if (AdDrug_Num==1) {
+        TMP_Category<-data.frame(V1=Table[i,]$Type,V2="",stringsAsFactors = FALSE)
+        Drug_Table<-rbind(Drug_Table,TMP_Category)
+      }
+    }
+    if (grepl("\r\n",Table[1,]$Comment1)) {
+      TMP_Content0<-unlist(strsplit(Table[i,]$Comment1,"\r\n"))
+      for (ZhuShi in TMP_Content0) {
+        TMP_Content<-data.frame(V1=c(Table[i,]$Drug),V2=c(ZhuShi),stringsAsFactors = FALSE)
+        Drug_Table<-rbind(Drug_Table,TMP_Content)
+      }
+    }else{
+      TMP_Content<-data.frame(V1=c(Table[i,]$Drug),V2=c(Table[i,]$Comment1),stringsAsFactors = FALSE)
+      Drug_Table<-rbind(Drug_Table,TMP_Content)
+    }
+    #TMP_Content<-data.frame(V1=c(rep(Table2[i,]$Drug,2)),V2=c(Table2[i,]$Comment1,Table2[i,]$Commnet2))
+    TMP_Text<-data.frame(V1=c(Table[i,]$Drug),V2=c(Table[i,]$Comment2),stringsAsFactors = FALSE)
+    #Drug_Table<-rbind(Drug_Table,TMP_Content)
+    Drug_Table<-rbind(Drug_Table,TMP_Text)
+  }
+  colnames(Drug_Table)<-c("药物","临床注释")
+  return(Drug_Table)
+}
+
+Drug_Table_Print<-function(data){
+  MERGED_H_RINDEX<-which(data[,2]=="")
+  ft<-flextable(data)%>%
+    #align(align = 'left',part='all') %>%#1.76#5
+    #compose(j="临床注释",i=~str_detect(data$临床注释,"增加"), value=as_paragraph(as_image(src=list.files(getwd(), 'YellowGanTan.png', full.names =T), width=.20, height=.20),"",临床注释), part='body')%>%
+    flextable::compose(j="临床注释",i=~str_detect(data$临床注释,"谨慎"), value=as_paragraph(as_image(src=list.files(getwd(), 'YellowGanTan.png', full.names =T), width=.20, height=.20),"",临床注释), part='body')%>%
+    flextable::compose(j="临床注释",i=~str_detect(data$临床注释,"调整用药"), value=as_paragraph(as_image(src=list.files(getwd(), 'YellowGanTan.png', full.names =T), width=.20, height=.20),"",临床注释), part='body')%>%
+    #compose(j="临床注释",i=~str_detect(data$临床注释,"更高剂量"), value=as_paragraph(as_image(src=list.files(getwd(), 'YellowGanTan.png', full.names =T), width=.20, height=.20),"",临床注释), part='body')%>%
+    flextable::compose(j="临床注释",i=~str_detect(data$临床注释,"风险"), value=as_paragraph(as_image(src=list.files(getwd(), 'RedGanTan.png', full.names =T), width=.20, height=.20),"",临床注释), part='body')%>%
+    flextable::compose(j="临床注释",i=~str_detect(data$临床注释,"正常剂量用药"), value=as_paragraph(as_image(src=list.files(getwd(), 'GreenCycle.png', full.names =T), width=.20, height=.20),"",临床注释), part='body')%>%
+    flextable::compose(j="临床注释",i=~str_detect(data$临床注释,"正常用药"), value=as_paragraph(as_image(src=list.files(getwd(), 'GreenCycle.png', full.names =T), width=.20, height=.20),"",临床注释), part='body')%>%
+    width(j=1,width = 1.8)%>%
+    width(j=2,width = 5.3)
+  for (i in seq.int(from=1,to=length(MERGED_H_RINDEX))) {
+    ft<-merge_at(ft,i=MERGED_H_RINDEX[i],part='body')
+  }
+  ft<-merge_v(ft,j=1,part='body')%>%
+    theme_box()%>%
+    #align(j=1, align = 'left')%>%
+    align(align = 'left',part='all')%>%
+    bg(bg='#DEEAF6', part='header')%>%
+    style(pr_t=fp_text(font.size=11,font.family="SimSun"))%>%
+    padding(padding = 2, part = 'body')
+  #delete_part(part = 'header')
+  return(ft)
+}
+
+Drug_Table<-Generate_DrugTable(Drug_Table_Info)#Table2
+
+
+Total_Gene_Analysis<-read_excel("gene_Chinese.xlsx")
+Total_Gene_Analysis<-as.data.frame(Total_Gene_Analysis)
+colnames(Total_Gene_Analysis)<-c("GENE","Analyte","GENETYPE","GENETYPE2","Phenotype","Result","Text")
+Total_Gene_Analysis$GENETYPE<-gsub("/","",Total_Gene_Analysis$GENETYPE)
+#Sample_Gene_list_Info<-read_excel("Sample_Gene_List.xlsx")
+#Sample_Gene_list_Info<-as.data.frame(Sample_Gene_list_Info)
+
+#CYP_GENE_list<-c("CYP2C19","CYP2C9","CYP3A4","CYP3A5","CYP4F2","CYP2D6")
+
+Generate_GeneInfo<-function(Sample_Info,Total_Gene_Summary,GXY_Gene_List){
+  CYP_GENE_list<-c("CYP2C19","CYP2C9","CYP3A4","CYP3A5","CYP4F2","CYP2D6")
+  Final_Gene_Info<-data.frame(stringsAsFactors = FALSE)
+  Sample_Gene_List<-unique(Sample_Info$`Gene Symbol`)
+  for (Gid in seq.int(from=1,to=length(Sample_Gene_List),by=1)) {
+    Search_GENE<-Sample_Gene_List[Gid]
+    if(Search_GENE %in% GXY_Gene_List){
+      Sample_Gene_Data<-Sample_Info[grep(paste(Search_GENE,"$",sep=""),Sample_Info$`Gene Symbol`),]
+      GENE_TMP_INFO<-Total_Gene_Summary[grep(paste(Search_GENE,"$",sep=""),Total_Gene_Summary$GENE),]
+      if (Search_GENE %in% CYP_GENE_list) {
+        GENE_TMP_Genotype<-unique(Sample_Gene_Data$diplotype)
+        GENE_TMP_Phenotype<-unique(Sample_Gene_Data$phenotype)
+        TMP_DATA<-data.frame(V1=c(Search_GENE),V2=c(GENE_TMP_Genotype),V3=c(""),V4=c(GENE_TMP_Phenotype),stringsAsFactors = FALSE)
+        Final_Gene_Info<-rbind(Final_Gene_Info,TMP_DATA)
+      }else{
+        RS_SNP_List<-unlist(strsplit(GENE_TMP_INFO[1,2],split=" "))
+        
+        if (length(RS_SNP_List)==2) {
+          #if (dim(Sample_Gene_Data)[1]==1) {
+          Search_Call<-Sample_Gene_Data[Sample_Gene_Data$`NCBI SNP Reference`==RS_SNP_List[2],]$Call
+          #Search_Call<-gsub("/","",Search_Call)
+          
+          print(Search_GENE)
+          print(Search_Call)
+          if (length(Search_Call)>0){
+            TMP_DATA<-data.frame(V1=c(Search_GENE),V2=c(Search_Call),V3=c(""),V4=c(""),stringsAsFactors = FALSE)
+            Final_Gene_Info<-rbind(Final_Gene_Info,TMP_DATA)
+          }else{print(paste(Search_GENE,"not match.",sep=" "))}
+          # }
+        }else if (length(RS_SNP_List)==3) {
+          if (dim(Sample_Gene_Data)[1]==2) {
+            #Search_Call1_Data<-Sample_Gene_Data[Sample_Gene_Data$`NCBI SNP Reference`==RS_SNP_List[2],]
+            Search_Call1<-Sample_Gene_Data[Sample_Gene_Data$`NCBI SNP Reference`==RS_SNP_List[2],]$Call
+            #Search_Call1<-gsub("/","",Search_Call1)
+            #Search_Call2_Data<-Sample_Gene_Data[Sample_Gene_Data$`NCBI SNP Reference`==RS_SNP_List[3],]
+            Search_Call2<-Sample_Gene_Data[Sample_Gene_Data$`NCBI SNP Reference`==RS_SNP_List[3],]$Call
+            #Search_Call2<-gsub("/","",Search_Call2)
+            if (length(Search_Call1)>0&length(Search_Call2)>0) {
+              TMP_DATA<-data.frame(V1=c(Search_GENE),V2=c(Search_Call1),V3=c(Search_Call2),V4=c(""),stringsAsFactors = FALSE)
+              Final_Gene_Info<-rbind(Final_Gene_Info,TMP_DATA)
+            }
+          }
+        }
+      }
+    }
+  }
+  colnames(Final_Gene_Info)<-c("GENE","GENETYPE","GENETYPE2","PHENOTYPE")
+  Final_Gene_Info<-rbind(Final_Gene_Info[grep("CYP",Final_Gene_Info$GENE),],Final_Gene_Info[-grep("CYP",Final_Gene_Info$GENE),])
+  return(Final_Gene_Info)
+}
+
+Generate_Gene_Table<-function(Sample_Gene_list_Info,Total_Gene_Analysis){
+  CYP_GENE_list<-c("CYP2C19","CYP2C9","CYP3A4","CYP3A5","CYP4F2","CYP2D6") 
+  Gene_Phenotype_Table<-data.frame(stringsAsFactors = FALSE)
+  for (i in seq(dim(Sample_Gene_list_Info)[1])) {
+    #print(i)
+    Gene<-Sample_Gene_list_Info[i,]$GENE
+    
+    if (Gene %in% CYP_GENE_list) {
+      print("CYP Gene")
+      print(Gene)
+      print(Sample_Gene_list_Info[i,]$GENETYPE)
+      print(Total_Gene_Analysis[Phenotype_Rindex,]$Result)
+      print(Total_Gene_Analysis[Phenotype_Rindex,]$Text)
+      TMP_GENE_DATA<-Total_Gene_Analysis[Total_Gene_Analysis$GENE==Gene,]
+      #TMP_GENE_TYPE<-unlist(strsplit(Sample_Gene_list_Info[i,]$GENETYPE,split=";"))
+      if (Sample_Gene_list_Info[i,]$PHENOTYPE=="nan") {
+        Sample_Gene_list_Info[i,]$PHENOTYPE<-""
+      }
+      if(Sample_Gene_list_Info[i,]$PHENOTYPE!=""){
+        Phenotype_Rindex<-which(Sample_Gene_list_Info[i,]$PHENOTYPE==TMP_GENE_DATA$Phenotype)
+        print("%%%%%%%%%%")
+        print(Phenotype_Rindex)
+        #if(length(Phenotype_Rindex)>0){
+        if(is.na(TMP_GENE_DATA[Phenotype_Rindex,]$Result)){TMP_GENE_DATA[Phenotype_Rindex,]$Result<-""}
+        if(is.na(TMP_GENE_DATA[Phenotype_Rindex,]$Text)){TMP_GENE_DATA[Phenotype_Rindex,]$Text<-""}
+        TMP_CYP_DF<-data.frame(V1=c(paste(Gene,"基因型",sep=" "),paste(Gene,"表型",sep=" "),""),V2=c(Sample_Gene_list_Info[i,]$GENETYPE,TMP_GENE_DATA[Phenotype_Rindex,]$Result,TMP_GENE_DATA[Phenotype_Rindex,]$Text),stringsAsFactors=FALSE)
+        Gene_Phenotype_Table<-rbind(Gene_Phenotype_Table,TMP_CYP_DF)
+      }
+    }
+    else{
+      #print("Not CYP Gene")
+      Gene_Content_Rindex<-which(Gene==Total_Gene_Analysis$GENE&c(!is.na(Total_Gene_Analysis$Analyte)))
+      Gene_Content<-Total_Gene_Analysis[Gene_Content_Rindex,]$Analyte
+      TMP_Analyte<-unlist(strsplit(Gene_Content,split=" "))
+      
+      for (j in seq.int(from=2,to=length(TMP_Analyte))) {
+        TMP_GENE_INFO<-""
+        TMP_CHAR<-unlist(strsplit(TMP_Analyte[j],split=""))
+        if (nchar(TMP_Analyte[j])>5) {
+          YinChang_Len<-nchar(TMP_Analyte[j])-4
+          #print(TMP_Analyte[j])
+          #print(YinChang_Len)
+          for (h in seq.int(from=1,to=YinChang_Len,by=1)) {
+            TMP_GENE_INFO<-str_c(TMP_GENE_INFO,TMP_CHAR[h],sep="")
+          }
+          TMP_GENE_INFO<-str_trim(TMP_GENE_INFO)
+          TMP_Analyte[j]<-str_c(TMP_GENE_INFO,"****",sep = "")
+          #print(TMP_Analyte[j])
+        }else{
+          TMP_GENE_INFO<-str_c(TMP_GENE_INFO,TMP_CHAR[1],TMP_CHAR[2],"****",sep="")
+          TMP_Analyte[j]<-str_trim(TMP_GENE_INFO)
+        }
+        
+      }
+      Gene_OUT<-''
+      for (k in TMP_Analyte) {
+        Gene_OUT<-str_c(Gene_OUT,k,sep=" ")
+      }
+      #TMP_Analyte<-unlist(strsplit())
+      Text_Rindex<-which(Gene==Total_Gene_Analysis$GENE&(!is.na(Total_Gene_Analysis$Text)))
+      if ((Sample_Gene_list_Info[i,]$GENETYPE2=="")|(is.na(Sample_Gene_list_Info[i,]$GENETYPE2))) {
+        if (grepl("/",Sample_Gene_list_Info[i,]$GENETYPE)) {
+          Search_GeneType<-gsub("/","",Sample_Gene_list_Info[i,]$GENETYPE)
+        }else{
+          Search_GeneType<-Sample_Gene_list_Info[i,]$GENETYPE
+        }
+        Search_GeneType_List<-unlist(strsplit(Search_GeneType,split=""))
+        Search_GeneType_Ver<-paste(Search_GeneType_List[2],Search_GeneType_List[1],sep="")
+        TMP_Result_Rindex<-which(Gene==Total_Gene_Analysis$GENE&(Search_GeneType==Total_Gene_Analysis$GENETYPE|Search_GeneType_Ver==Total_Gene_Analysis$GENETYPE))
+        print("Single---")
+        print(Gene)
+        print(c(TMP_GENE_INFO,"基因型",""))
+        print(Sample_Gene_list_Info[i,]$GENETYPE)
+        print(c(Search_GeneType,TMP_Result_Rindex))
+        print(Total_Gene_Analysis[TMP_Result_Rindex,]$Result)
+        print(Total_Gene_Analysis[Text_Rindex,]$Text)
+        TMP_DF<-data.frame(V1=c(Gene_OUT,"基因型",""),V2=c(Sample_Gene_list_Info[i,]$GENETYPE,Total_Gene_Analysis[TMP_Result_Rindex,]$Result,Total_Gene_Analysis[Text_Rindex,]$Text),stringsAsFactors=FALSE)
+        Gene_Phenotype_Table<-rbind(Gene_Phenotype_Table,TMP_DF)
+      }
+      else{
+        #if (grepl("/",Sample_Gene_list_Info[i,]$GENETYPE)) {
+        Search_GeneType<-gsub("/","",Sample_Gene_list_Info[i,]$GENETYPE)
+        Search_GeneType2<-gsub("/","",Sample_Gene_list_Info[i,]$GENETYPE2)
+        #}else{
+        #  Search_GeneType<-Sample_Gene_list_Info[i,]$GENETYPE
+        #  Search_GeneType2<-Sample_Gene_list_Info[i,]$GENETYPE2
+        #}
+        Search_GeneType_List<-unlist(strsplit(Search_GeneType,split=""))
+        Search_GeneType_Ver<-paste(Search_GeneType_List[2],Search_GeneType_List[1],sep="")
+        Search_GeneType2_List<-unlist(strsplit(Search_GeneType2,split=""))
+        Search_GeneType2_Ver<-paste(Search_GeneType2_List[2],Search_GeneType2_List[1],sep="")
+        print("Two---")
+        print(Gene)
+        print(c(TMP_GENE_INFO,"基因型",""))
+        print(Sample_Gene_list_Info[i,]$GENETYPE)
+        print(c(Search_GeneType,TMP_Result_Rindex))
+        print(Total_Gene_Analysis[TMP_Result_Rindex,]$Result)
+        print(Total_Gene_Analysis[Text_Rindex,]$Text)
+        print("######")
+        print(Gene_OUT)
+        print(Sample_Gene_list_Info[i,]$GENETYPE)
+        print(Sample_Gene_list_Info[i,]$GENETYPE2)
+        print(Total_Gene_Analysis[TMP_Result_Rindex,]$Result)
+        print(Total_Gene_Analysis[Text_Rindex,]$Text)
+        #print("******")
+        #print(length(c(Gene_OUT,"基因型","")))
+        #print(length(c(paste(Sample_Gene_list_Info[i,]$GENETYPE,Sample_Gene_list_Info[i,]$GENETYPE2,sep=","),Total_Gene_Analysis[TMP_Result_Rindex,]$Result,Total_Gene_Analysis[Text_Rindex,]$Text)))
+        #TMP_Result_Rindex<-which(Gene==Total_Gene_Analysis$GENE&(Search_GeneType==Total_Gene_Analysis$GENETYPE|Search_GeneType==Total_Gene_Analysis$GENETYPE2)&(Search_GeneType2==Total_Gene_Analysis$GENETYPE2|Search_GeneType2==Total_Gene_Analysis$GENETYPE))
+        TMP_Result_Rindex<-which(Gene==Total_Gene_Analysis$GENE&(Search_GeneType==Total_Gene_Analysis$GENETYPE|Search_GeneType_Ver==Total_Gene_Analysis$GENETYPE)&(Search_GeneType2==Total_Gene_Analysis$GENETYPE2|Search_GeneType2_Ver==Total_Gene_Analysis$GENETYPE2))
+        TMP_DF<-data.frame(V1=c(Gene_OUT,"基因型",""),V2=c(paste(Sample_Gene_list_Info[i,]$GENETYPE,Sample_Gene_list_Info[i,]$GENETYPE2,sep=","),Total_Gene_Analysis[TMP_Result_Rindex,]$Result,Total_Gene_Analysis[Text_Rindex,]$Text),stringsAsFactors=FALSE)
+        Gene_Phenotype_Table<-rbind(Gene_Phenotype_Table,TMP_DF)
+      }
+    }
+  }
+  colnames(Gene_Phenotype_Table)<-c("检测指标","结果")
+  return(Gene_Phenotype_Table)
+}
+
+Sample_Gene_list_Info<-Generate_GeneInfo(Sample_Info = Sample_Info,Total_Gene_Summary=Total_Gene_Analysis,GXY_Gene_List = GaoXueYa_Gene_List)
+Gene_Phenotype_Table<-Generate_Gene_Table(Sample_Gene_list_Info=Sample_Gene_list_Info,Total_Gene_Analysis=Total_Gene_Analysis)
+
+Gene_Table_Print<-function(data){
+  ft<-flextable(data)%>%
+    width(j=1,width = 2.3)%>%
+    width(j=2,width = 4.8)%>%
+    align(align = 'left',part='all')%>%
+    bg(bg='#DEEAF6', part='header')%>%
+    border_remove()%>%
+    border_outer(border=fp_border())
+  #theme_box()#2.15#4.6
+  for(q in seq.int(from = 1,to=c(dim(data)[1]/3),by=1)) {
+    RowNum<-q*3
+    ft<-hline(ft,i=RowNum,border = fp_border())
+  }
+  ft<-vline(ft,j=2,border=fp_border(),part='header')
+  #ft<-delete_part(ft,part = 'header')
+  return(ft)
+}
+
+
+#Table_One_ft<-Summary_Table_Print(Total_Table_One)
+#Summary_Table_Print0<-Summary_Table_Print(Table_Summary)
+Table_Summary0<-Table_Generate(YaoWu_Data,BiaoZhun_Data,FengXian_Data)
+Table_One_ft<-Summary_Table_Print0(Table_Summary0)
+#Table_Two_ft<-Drug_Table_Print(Table2)
+Table_Two_ft<-Drug_Table_Print(Drug_Table)
+Table_Three_ft<-Gene_Table_Print(Gene_Phenotype_Table)
+template_doc<-"中文_Template.docx"
+doc <- read_docx(template_doc) %>%
+  body_add_flextable(Table_One_ft)%>%
+  body_add_par("详细解析",style = 'summary_table_title')%>%
+  body_add_flextable(Table_Two_ft)%>%
+  body_add_par("基因型分析",style="summary_table_title")%>%
+  body_add_flextable(Table_Three_ft)
+  #body_add_par("参考文献",style="Normal")
+  #Reference<-read_excel("Reference.xlsx")
+  #Reference<-as.data.frame(Reference)
+  #for (w in seq.int(from=1,to=dim(Reference)[1],by=1)) {
+#  doc<-body_add_par(doc,str_trim(Reference[w,]),style='Normal')
+#}
+doc<-body_add_docx(doc,"disclaimer_Chinese.docx")  
+ 
+print(doc,target="Test_V5.docx")
+#################################Sample Clinical Information###############################
+#Basic_sample_info <- read_tsv(list.files(getwd(), 'sample_info.tsv', full.names = T))
+#Sample_Info_Print<-function()
+#name <- Basic_sample_info$姓名
+#gender <- Basic_sample_info$性别
+#sample_id <- Basic_sample_info$样本编号
+#age <- Basic_sample_info$年龄
+#sample_barcode <- Basic_sample_info$预置条码
+#sample_hospital <- Basic_sample_info$送检单位
+
+#template_doc<-read_docx("中文_Template.docx")
+#template_doc<-read_docx("Test_V4.docx")
+#template_doc<-headers_replace_all_text(template_doc,'',sample_barcode)
+#template_doc<-headers_replace_all_text(template_doc,'xing_ming',name)
+#template_doc<-headers_replace_all_text(template_doc,'xing_bie',gender)
+#template_doc<-headers_replace_all_text(template_doc,'nian_ling',age)
+#template_doc<-headers_replace_all_text(template_doc,'sample_id',sample_id)
+#print(template_doc,target="Test_V4_Final.docx")
+###########################################################################################
+
+library(officer)
+library(flextable)
+library(readxl)
+library(stringr)
+library(optparse)
+
+option_list<-list(make_option(c("-i","--info_dir"),type="character",default=NULL,help="Sample information directory",metavar="character"),
+                  make_option(c("-d","--drug_table"),type="character",default=NULL,help="Gao Xue Ya Drug Summary table file",metavar="character"),
+                  make_option(c("-g","--gene_table"),type="character",default=NULL,help="Gao Xue Ya Gene Phenotype Summary table file",metavar="character"),
+                  make_option(c("-m","--images"),type="character",default=NULL,help="images directory",metavar="character"),
+                  make_option(c("-o","--out"),type="character",default="template.docx",help="output docx file [default= %default]",metavar="character"))
+
+opt_parser<-OptionParser(option_list=option_list)
+opt<-parse_args(opt_parser)
+print(opt)
+
+Text_Paste<-function(Match_Data){
+  if (!is.na(Match_Data$C3)) {
+    Comment2_Text<-paste(Match_Data$C2,Match_Data$C3,sep="")
+  }else{Comment2_Text<-Match_Data$C2}
+  if (is.na(Match_Data$C4)) {
+    Comment2_Text<-paste(Comment2_Text,"",sep="")
+  }else{Comment2_Text<-paste(Comment2_Text,Match_Data$C4,sep="")}
+  if (is.na(Match_Data$C5)) {
+    Comment2_Text<-paste(Comment2_Text,"",sep="")
+  }else{Comment2_Text<-paste(Comment2_Text,Match_Data$C5,sep="")}
+  return(Comment2_Text)
+}
+
+Total_Drug_Chinese<-read_excel("drug_English.xlsx",col_names = FALSE)
+#Total_Drug_Chinese<-read_excel(opt$drug_table,col_names = FALSE)
+Total_Drug_Chinese<-as.data.frame(Total_Drug_Chinese)
+colnames(Total_Drug_Chinese)<-c("Drug","Gene1","Gene2","Gene3","Gene4","FXout","Flag","C1","C2","C3","C4","C5")
+Sample_Info<-read_excel("GXY_Test_Sample_Info.xlsx",col_names = TRUE)
+colnames(Sample_Info)<-c("Gene Symbol","NCBI SNP Reference","Call","Sample ID","GeneType","Assay ID","Genotype")
+####Remove re detecting variants
+if(length(grep("Redup",Sample_Info$Call))>0){
+  Sample_Info<-Sample_Info[-grep("Redup",Sample_Info$Call),]
+}
+Diplotype<-read.csv("qXXG200417007.diplotype.tsv",sep='\t',header=TRUE,stringsAsFactors=FALSE)
+
+Sample_Info$diplotype<-""
+Sample_Info$phenotype_p<-""
+Sample_Info$phenotype<-""
+for (tid in seq.int(from=1,to=dim(Sample_Info)[1],by=1)) {
+  Gene_tmp<-str_c(c(Sample_Info[tid,1]))
+  if (length(which(Gene_tmp==Diplotype$gene))>0) {
+    Sample_Info[tid,]$diplotype<-Diplotype[which(Gene_tmp==Diplotype$gene),]$diplotype
+    Sample_Info[tid,]$phenotype_p<-Diplotype[which(Gene_tmp==Diplotype$gene),]$phenotype_p
+    Sample_Info[tid,]$phenotype<-Diplotype[which(Gene_tmp==Diplotype$gene),]$phenotype
+  }
+}
+
+GaoXueYa_Gene_List<-c("CYP2D6","CYP2C9","CYP3A5","ABCB1","ACE","ADD1",
+                      "ADRB1","AGT","CACNA1C","KCNJ1","MTHFR","NEDD4L",
+                      "PTGER3","SLCO1B1")
+
+
+###############################Drug Information Extrating#########################
+Search_Drug_Summary<-list('Metoprolol'=c('rs1801253','CYP2D6'),'Carvedilol'=c('rs1801253','CYP2D6'),
+                          'Atenolol'=c('rs1801253'),'ACE inhibitor'=c('BDKRB2','PTGER3'),
+                          "Benazepril Imidapril"=c('rs5051','BDKRB2','PTGER3'),"Captopril  Lisinopril"=c('rs699','BDKRB2','PTGER3'),
+                          'Enalapril'=c('rs4149056','rs699','BDKRB2','PTGER3'),"Losartan"=c('CYP2C9','ABCB1'),"Irbesartan"=c("CYP2C9"),"Candesartan"=c("AGTR1"),
+                          "CCB Calcium Antagonists Calcium Channel Blockers"=c("rs2238032"),"Amlodipine"=c("rs776746"),
+                          "Nifedipine"=c("rs776746"),"Verapamil"=c("CACNA1C","ABCB1"),"Hydrochlorothiazide"=c("NEDD4L","KCNJ1"),"Spironolactone"=c("ADD1"),"Chlorthalidone"=c('ACE'),"Folic Acid"=c("rs1801133"))
+Search_Drug_Name<-names(Search_Drug_Summary)
+Drug_Table_Info<-data.frame(stringsAsFactors = FALSE)
+Drug_Type<-list("β-receptor blocker"=c("Metoprolol","Carvedilol","Atenolol"),
+                "ACE inhibitor"=c("ACE inhibitor","Enalapril","Benazepril Imidapril","Captopril  Lisinopril"),
+                "ARBs Angiotensin II receptor blockers"=c("Losartan","Irbesartan","Candesartan"),
+                "Diuretics"=c("Hydrochlorothiazide","Spironolactone","Chlorthalidone"),
+                "CCB Calcium Antagonists Calcium Channel Blockers"=c("CCB Calcium Antagonists Calcium Channel Blockers","Amlodipine","Nifedipine","Verapamil"),
+                "Adjuvant Drug"=c("Folic Acid"))
+YaoWu_Data<-c()
+BiaoZhun_Data<-c()
+FengXian_Data<-c()
+for (lid in seq.int(from=1,to=length(Search_Drug_Summary),by=1)) {
+  if (Search_Drug_Name[lid]=="Metoprolol") {
+    TMP_DATA<-Total_Drug_Chinese[Search_Drug_Name[lid]==Total_Drug_Chinese$Drug,]
+    #rs_snp<-Search_Drug_Summary[[Search_Drug_Name[lid]]][1]
+    #Gene_CYP<-Search_Drug_Summary[[Search_Drug_Name[lid]]][2]
+    Gene1_Phenotype<-unique(Sample_Info[grep("CYP2D6",Sample_Info$`Gene Symbol`),]$phenotype)
+    Gene2_Call<-Sample_Info[grep("rs1801253",Sample_Info$`NCBI SNP Reference`),]$Call
+    Gene2_Call<-gsub("/","",Gene2_Call)
+    Gene2_Call_List<-unlist(strsplit(Gene2_Call,split=""))
+    Gene2_Call_Ver<-paste(Gene2_Call_List[2],Gene2_Call_List[1],sep="")
+    #Gene2_Call<-str_c(Gene2_Call_tmp[1],Gene2_Call_tmp[2],sep="")
+    print(Search_Drug_Name[lid])
+    if (length(Gene2_Call)>0&length(Gene1_Phenotype)>0) {
+      Match_Data<-TMP_DATA[which(Gene1_Phenotype==TMP_DATA$Gene2&(Gene2_Call==TMP_DATA$Gene1|Gene2_Call_Ver==TMP_DATA$Gene1)),]
+    
+      if (Match_Data$Flag==1) {
+        YaoWu_Data<-c(YaoWu_Data,Match_Data$Drug)
+      }
+      else if (Match_Data$Flag==2) {
+        BiaoZhun_Data<-c(BiaoZhun_Data,Match_Data$Drug)
+      }
+      if (Search_Drug_Name[lid] %in% Drug_Type$`β-receptor blocker`) {
+        Comment2_Text<-Text_Paste(Match_Data)
+        #Drug_TmpTable<-data.frame(V1=c(Search_Drug_Name[lid]),V2=c("β-receptor blocker"),V3=c(Match_Data$C1),V4=c(Match_Data$C2),stringsAsFactors = FALSE)
+        Drug_TmpTable<-data.frame(V1=c(Search_Drug_Name[lid]),V2=c("β-receptor blocker"),V3=c(Match_Data$C1),V4=c(Comment2_Text),stringsAsFactors = FALSE)
+        Drug_Table_Info<-rbind(Drug_Table_Info,Drug_TmpTable)
+      }
+    }
+  }else if (Search_Drug_Name[lid]=="Carvedilol") {
+    TMP_DATA<-Total_Drug_Chinese[Search_Drug_Name[lid]==Total_Drug_Chinese$Drug,]
+    Gene1_Phenotype<-unique(Sample_Info[grep("CYP2D6",Sample_Info$`Gene Symbol`),]$phenotype)
+    Gene2_Call<-Sample_Info[grep("rs1801253",Sample_Info$`NCBI SNP Reference`),]$Call
+    Gene2_Call<-gsub("/","",Gene2_Call)
+    Gene2_Call_List<-unlist(strsplit(Gene2_Call,split=""))
+    Gene2_Call_Ver<-paste(Gene2_Call_List[2],Gene2_Call_List[1],sep="")
+    print(Search_Drug_Name[lid])
+    if (length(Gene2_Call)>0&length(Gene1_Phenotype)>0) {
+      Match_Data<-TMP_DATA[which(Gene1_Phenotype==TMP_DATA$Gene2&(Gene2_Call==TMP_DATA$Gene1|Gene2_Call_Ver==TMP_DATA$Gene1)),]
+      if (Match_Data$Flag==1) {
+        YaoWu_Data<-c(YaoWu_Data,Match_Data$Drug)
+      }
+      else if (Match_Data$Flag==2) {
+        BiaoZhun_Data<-c(BiaoZhun_Data,Match_Data$Drug)
+      }
+      if (Search_Drug_Name[lid] %in% Drug_Type$`β-receptor blocker`) {
+        Comment2_Text<-Text_Paste(Match_Data)
+        #Drug_TmpTable<-data.frame(V1=c(Search_Drug_Name[lid]),V2=c("β-receptor blocker"),V3=c(Match_Data$C1),V4=c(Match_Data$C2),stringsAsFactors = FALSE)
+        Drug_TmpTable<-data.frame(V1=c(Search_Drug_Name[lid]),V2=c("β-receptor blocker"),V3=c(Match_Data$C1),V4=c(Comment2_Text),stringsAsFactors = FALSE)
+        Drug_Table_Info<-rbind(Drug_Table_Info,Drug_TmpTable)
+      }
+    }
+  }else if (Search_Drug_Name[lid]=="Atenolol") {
+    TMP_DATA<-Total_Drug_Chinese[Search_Drug_Name[lid]==Total_Drug_Chinese$Drug,]
+    Gene2_Call<-Sample_Info[grep("rs1801253",Sample_Info$`NCBI SNP Reference`),]$Call
+    Gene2_Call<-gsub("/","",Gene2_Call)
+    Gene2_Call_List<-unlist(strsplit(Gene2_Call,split=""))
+    Gene2_Call_Ver<-paste(Gene2_Call_List[2],Gene2_Call_List[1],sep="")
+    print(Search_Drug_Name[lid])
+    if (length(Gene2_Call)>0&length(Gene1_Phenotype)>0) {
+      Match_Data<-TMP_DATA[which(Gene2_Call==TMP_DATA$Gene1|Gene2_Call_Ver==TMP_DATA$Gene1),]
+     if (Match_Data$Flag==1) {
+       YaoWu_Data<-c(YaoWu_Data,Match_Data$Drug)
+     }
+     else if (Match_Data$Flag==2) {
+        BiaoZhun_Data<-c(BiaoZhun_Data,Match_Data$Drug)
+      }
+      if (Search_Drug_Name[lid] %in% Drug_Type$`β-receptor blocker`) {
+        Comment2_Text<-Text_Paste(Match_Data)
+        #Drug_TmpTable<-data.frame(V1=c(Search_Drug_Name[lid]),V2=c("β-receptor blocker"),V3=c(Match_Data$C1),V4=c(Match_Data$C2),stringsAsFactors = FALSE)
+        Drug_TmpTable<-data.frame(V1=c(Search_Drug_Name[lid]),V2=c("β-receptor blocker"),V3=c(Match_Data$C1),V4=c(Comment2_Text),stringsAsFactors = FALSE)
+        Drug_Table_Info<-rbind(Drug_Table_Info,Drug_TmpTable)
+      }
+    }
+  }else if (Search_Drug_Name[lid]=="ACE inhibitor") {
+    #'BDKRB2','PTGER3'
+    TMP_DATA<-Total_Drug_Chinese[Search_Drug_Name[lid]==Total_Drug_Chinese$Drug,]
+    Gene1_Call<-Sample_Info[grep("BDKRB2",Sample_Info$`Gene Symbol`),]$Call
+    Gene1_Call<-gsub("/","",Gene1_Call)
+    Gene1_Call_List<-unlist(strsplit(Gene1_Call,split=""))
+    Gene1_Call_Ver<-paste(Gene1_Call_List[2],Gene1_Call_List[1],sep="")
+    Gene2_Call<-Sample_Info[grep("PTGER3",Sample_Info$`Gene Symbol`),]$Call
+    Gene2_Call<-gsub("/","",Gene2_Call)
+    Gene2_Call_List<-unlist(strsplit(Gene2_Call,split=""))
+    Gene2_Call_Ver<-paste(Gene2_Call_List[2],Gene2_Call_List[1],sep="")
+    print(Search_Drug_Name[lid])
+    if (length(Gene1_Call)>0&length(Gene2_Call)>0) {
+      Match_Data<-TMP_DATA[which((Gene1_Call==TMP_DATA$Gene1|Gene1_Call_Ver==TMP_DATA$Gene1)&(Gene2_Call==TMP_DATA$Gene2|Gene2_Call_Ver==TMP_DATA$Gene2)),]
+      if (Match_Data$FXout=="Yes") {
+        FengXian_Data<-c(FengXian_Data,"ACEi-related cough")
+      }
+      if (Search_Drug_Name[lid] %in% Drug_Type$`β-receptor blocker`) {
+        Comment2_Text<-Text_Paste(Match_Data)
+        #Drug_TmpTable<-data.frame(V1=c(Search_Drug_Name[lid]),V2=c("β-receptor blocker"),V3=c(Match_Data$C1),V4=c(Match_Data$C2),stringsAsFactors = FALSE)
+        Drug_TmpTable<-data.frame(V1=c(Search_Drug_Name[lid]),V2=c("β-receptor blocker"),V3=c(Match_Data$C1),V4=c(Comment2_Text),stringsAsFactors = FALSE)
+        Drug_Table_Info<-rbind(Drug_Table_Info,Drug_TmpTable)
+      }
+    }
+  }else if (Search_Drug_Name[lid]=="Benazepril Imidapril") {
+    #"rs5051" "BDKRB2" "PTGER3"
+    TMP_DATA<-Total_Drug_Chinese[Search_Drug_Name[lid]==Total_Drug_Chinese$Drug,]
+    Gene1_Call<-Sample_Info[grep("rs5051",Sample_Info$`NCBI SNP Reference`),]$Call
+    Gene1_Call<-gsub("/","",Gene1_Call)
+    Gene1_Call_List<-unlist(strsplit(Gene1_Call,split=""))
+    Gene1_Call_Ver<-paste(Gene1_Call_List[2],Gene1_Call_List[1],sep="")
+    Gene2_Call<-Sample_Info[grep("BDKRB2",Sample_Info$`Gene Symbol`),]$Call
+    Gene2_Call<-gsub("/","",Gene2_Call)
+    Gene2_Call_List<-unlist(strsplit(Gene2_Call,split=""))
+    Gene2_Call_Ver<-paste(Gene2_Call_List[2],Gene2_Call_List[1],sep="")
+    Gene3_Call<-Sample_Info[grep("PTGER3",Sample_Info$`Gene Symbol`),]$Call
+    Gene3_Call<-gsub("/","",Gene3_Call)
+    Gene3_Call_List<-unlist(strsplit(Gene3_Call,split=""))
+    Gene3_Call_Ver<-paste(Gene3_Call_List[2],Gene3_Call_List[1],sep="")
+    print(Search_Drug_Name[lid])
+    if (length(Gene1_Call)>0&length(Gene2_Call)&length(Gene3_Call)) {
+      if(Gene1_Call %in% c("TT","CT")) {
+        Match_Data<-TMP_DATA[which(Gene1_Call==TMP_DATA$Gene1|Gene1_Call_Ver==TMP_DATA$Gene1),]
+      }else{
+        Match_Data<-TMP_DATA[which((Gene1_Call==TMP_DATA$Gene1|Gene1_Call_Ver==TMP_DATA$Gene1)&(Gene2_Call==TMP_DATA$Gene2|Gene2_Call_Ver==TMP_DATA$Gene2)&(Gene3_Call==TMP_DATA$Gene3|Gene3_Call_Ver==TMP_DATA$Gene3)),]
+        }
+      if(dim(Match_Data)[1]==1&Match_Data$Flag==1) {
+        YaoWu_Data<-c(YaoWu_Data,Match_Data$Drug)
+      }else if (dim(Match_Data)[1]==1&Match_Data$Flag==2) {
+        BiaoZhun_Data<-c(BiaoZhun_Data,Match_Data$Drug)
+      }
+      if (Search_Drug_Name[lid] %in% Drug_Type$`β-receptor blocker`) {
+        Comment2_Text<-Text_Paste(Match_Data)
+        #Drug_TmpTable<-data.frame(V1=c(Search_Drug_Name[lid]),V2=c("β-receptor blocker"),V3=c(Match_Data$C1),V4=c(Match_Data$C2),stringsAsFactors = FALSE)
+        Drug_TmpTable<-data.frame(V1=c(Search_Drug_Name[lid]),V2=c("β-receptor blocker"),V3=c(Match_Data$C1),V4=c(Comment2_Text),stringsAsFactors = FALSE)
+        Drug_Table_Info<-rbind(Drug_Table_Info,Drug_TmpTable)
+      }
+    }
+  }else if (Search_Drug_Name[lid]=="Captopril  Lisinopril") {
+    #"rs699"  "BDKRB2" "PTGER3"
+    Total_Drug_Chinese$Drug<-gsub(","," ",Total_Drug_Chinese$Drug)
+    TMP_DATA<-Total_Drug_Chinese[Search_Drug_Name[lid]==Total_Drug_Chinese$Drug,]
+    Gene1_Call<-Sample_Info[grep("rs699",Sample_Info$`NCBI SNP Reference`),]$Call
+    Gene1_Call<-gsub("/","",Gene1_Call)
+    Gene1_Call_List<-unlist(strsplit(Gene1_Call,split=""))
+    Gene1_Call_Ver<-paste(Gene1_Call_List[2],Gene1_Call_List[1],sep="")
+    Gene2_Call<-Sample_Info[grep("BDKRB2",Sample_Info$`Gene Symbol`),]$Call
+    Gene2_Call<-gsub("/","",Gene2_Call)
+    Gene2_Call_List<-unlist(strsplit(Gene2_Call,split=""))
+    Gene2_Call_Ver<-paste(Gene2_Call_List[2],Gene2_Call_List[1],sep="")
+    Gene3_Call<-Sample_Info[grep("PTGER3",Sample_Info$`Gene Symbol`),]$Call
+    Gene3_Call<-gsub("/","",Gene3_Call)
+    Gene3_Call_List<-unlist(strsplit(Gene3_Call,split=""))
+    Gene3_Call_Ver<-paste(Gene3_Call_List[2],Gene3_Call_List[1],sep="")
+    print(Search_Drug_Name[lid])
+    if (length(Gene1_Call)>0&length(Gene2_Call)>0&length(Gene3_Call)>0) {
+      Match_Data<-TMP_DATA[which((Gene1_Call==TMP_DATA$Gene1|Gene1_Call_Ver==TMP_DATA$Gene1)&(Gene2_Call==TMP_DATA$Gene2|Gene2_Call_Ver==TMP_DATA$Gene2)&(Gene3_Call==TMP_DATA$Gene3|Gene3_Call_Ver==TMP_DATA$Gene3)),]
+      if(dim(Match_Data)[1]==1&Match_Data$Flag==1) {
+        YaoWu_Data<-c(YaoWu_Data,Match_Data$Drug)
+      }else if (dim(Match_Data)[1]==1&Match_Data$Flag==2) {
+        BiaoZhun_Data<-c(BiaoZhun_Data,Match_Data$Drug)
+      }
+    }
+    if (Search_Drug_Name[lid] %in% Drug_Type$`β-receptor blocker`) {
+      Comment2_Text<-Text_Paste(Match_Data)
+      #Drug_TmpTable<-data.frame(V1=c(Search_Drug_Name[lid]),V2=c("β-receptor blocker"),V3=c(Match_Data$C1),V4=c(Match_Data$C2),stringsAsFactors = FALSE)
+      Drug_TmpTable<-data.frame(V1=c(Search_Drug_Name[lid]),V2=c("β-receptor blocker"),V3=c(Match_Data$C1),V4=c(Comment2_Text),stringsAsFactors = FALSE)
+      Drug_Table_Info<-rbind(Drug_Table_Info,Drug_TmpTable)
+    }
+  }else if (Search_Drug_Name[lid]=="Enalapril") {
+    #"rs4149056" "rs699"     "BDKRB2"    "PTGER3"
+    TMP_DATA<-Total_Drug_Chinese[Search_Drug_Name[lid]==Total_Drug_Chinese$Drug,]
+    Gene0_Call<-Sample_Info[grep("rs4149056",Sample_Info$`NCBI SNP Reference`),]$Call
+    Gene0_Call<-gsub("/","",Gene0_Call)
+    Gene0_Call_List<-unlist(strsplit(Gene0_Call,split=""))
+    Gene0_Call_Ver<-paste(Gene0_Call_List[2],Gene0_Call_List[1],sep="")
+    Gene1_Call<-Sample_Info[grep("rs699",Sample_Info$`NCBI SNP Reference`),]$Call
+    Gene1_Call<-gsub("/","",Gene1_Call)
+    Gene1_Call_List<-unlist(strsplit(Gene1_Call,split=""))
+    Gene1_Call_Ver<-paste(Gene1_Call_List[2],Gene1_Call_List[1],sep="")
+    Gene2_Call<-Sample_Info[grep("BDKRB2",Sample_Info$`Gene Symbol`),]$Call
+    Gene2_Call<-gsub("/","",Gene2_Call)
+    Gene2_Call_List<-unlist(strsplit(Gene2_Call,split=""))
+    Gene2_Call_Ver<-paste(Gene2_Call_List[2],Gene2_Call_List[1],sep="")
+    Gene3_Call<-Sample_Info[grep("PTGER3",Sample_Info$`Gene Symbol`),]$Call
+    Gene3_Call<-gsub("/","",Gene3_Call)
+    Gene3_Call_List<-unlist(strsplit(Gene3_Call,split=""))
+    Gene3_Call_Ver<-paste(Gene3_Call_List[2],Gene3_Call_List[1],sep="")
+    print(Search_Drug_Name[lid])
+    if (length(Gene0_Call)==1&length(Gene1_Call)==1&length(Gene2_Call)==1&length(Gene3_Call)==1) {
+      if (Gene0_Call %in% c("CC","CT","TC")) {
+        Match_Data<-TMP_DATA[which((Gene0_Call==TMP_DATA$Gene1|Gene0_Call_Ver==TMP_DATA$Gene1)&(Gene1_Call==TMP_DATA$Gene2|Gene1_Call_Ver==TMP_DATA$Gene2)),]
+      }else{
+        Match_Data<-TMP_DATA[which((Gene0_Call==TMP_DATA$Gene1|Gene0_Call_Ver==TMP_DATA$Gene1)&(Gene1_Call==TMP_DATA$Gene2|Gene1_Call_Ver==TMP_DATA$Gene2)&(Gene2_Call==TMP_DATA$Gene3|Gene2_Call_Ver==TMP_DATA$Gene3)&(Gene3_Call==TMP_DATA$Gene4|Gene3_Call_Ver==TMP_DATA$Gene4)),]
+      }
+      if(dim(Match_Data)[1]>0){
+        if(Match_Data$Flag==1) {
+          YaoWu_Data<-c(YaoWu_Data,Match_Data$Drug)
+        }else if (Match_Data$Flag==2) {
+          BiaoZhun_Data<-c(BiaoZhun_Data,Match_Data$Drug)
+        }
+      }
+    }
+    if (Search_Drug_Name[lid] %in% Drug_Type$`β-receptor blocker`) {
+      if (dim(Match_Data)[1]>0) {
+        Comment2_Text<-Text_Paste(Match_Data)
+        #Drug_TmpTable<-data.frame(V1=c(Search_Drug_Name[lid]),V2=c("β-receptor blocker"),V3=c(Match_Data$C1),V4=c(Match_Data$C2),stringsAsFactors = FALSE)
+        Drug_TmpTable<-data.frame(V1=c(Search_Drug_Name[lid]),V2=c("β-receptor blocker"),V3=c(Match_Data$C1),V4=c(Comment2_Text),stringsAsFactors = FALSE)
+        Drug_Table_Info<-rbind(Drug_Table_Info,Drug_TmpTable)
+      }
+    }
+  }else if (Search_Drug_Name[lid]=="Losartan") {
+    #"CYP2C9" "ABCB1"
+    TMP_DATA<-Total_Drug_Chinese[Search_Drug_Name[lid]==Total_Drug_Chinese$Drug,]
+    Gene1_Call<-Sample_Info[grep("CYP2C9",Sample_Info$`Gene Symbol`),]$Call
+    Gene1_Call<-gsub("/","",Gene1_Call)
+    Gene1_diplotype<-unique(Sample_Info[grep("CYP2C9",Sample_Info$`Gene Symbol`),]$diplotype)
+    #Gene1_phenotype<-unique(Sample_Info[grep("CYP2C9",Sample_Info$`Gene Symbol`),]$phenotype)
+    Gene2_Call<-Sample_Info[grep("ABCB1",Sample_Info$`Gene Symbol`),]$Call
+    Gene2_Call<-gsub("/","",Gene2_Call)
+    Gene2_Call_List<-unlist(strsplit(Gene2_Call,split=""))
+    Gene2_Call_Ver<-paste(Gene2_Call_List[2],Gene2_Call_List[1],sep="")
+    print(Search_Drug_Name[lid])
+    if (length(Gene1_Call)>0&length(Gene2_Call)>0) {
+      Match_Data<-TMP_DATA[which(Gene1_diplotype==TMP_DATA$Gene1&(Gene2_Call==TMP_DATA$Gene2|Gene2_Call_Ver==TMP_DATA$Gene2)),]
+      if(dim(Match_Data)[1]>0){
+        if(Match_Data$Flag==1) {
+          YaoWu_Data<-c(YaoWu_Data,Match_Data$Drug)
+        }else if (Match_Data$Flag==2) {
+          BiaoZhun_Data<-c(BiaoZhun_Data,Match_Data$Drug)
+        }
+      }
+    }
+    if (Search_Drug_Name[lid] %in% Drug_Type$``) {
+      Comment2_Text<-Text_Paste(Match_Data)
+      #Drug_TmpTable<-data.frame(V1=c(Search_Drug_Name[lid]),V2=c("ARBs Angiotensin II receptor blockers"),V3=c(Match_Data$C1),V4=c(Match_Data$C2),stringsAsFactors = FALSE)
+      Drug_TmpTable<-data.frame(V1=c(Search_Drug_Name[lid]),V2=c("ARBs Angiotensin II receptor blockers"),V3=c(Match_Data$C1),V4=c(Comment2_Text),stringsAsFactors = FALSE)
+      Drug_Table_Info<-rbind(Drug_Table_Info,Drug_TmpTable)
+    }
+  }else if (Search_Drug_Name[lid]=="Irbesartan") {
+    #"CYP2C9"
+    TMP_DATA<-Total_Drug_Chinese[Search_Drug_Name[lid]==Total_Drug_Chinese$Drug,]
+    Gene1_Call<-Sample_Info[grep("CYP2C9",Sample_Info$`Gene Symbol`),]$Call
+    Gene1_Call<-gsub("/","",Gene1_Call)
+    Gene1_diplotype<-unique(Sample_Info[grep("CYP2C9",Sample_Info$`Gene Symbol`),]$diplotype)
+    print(Search_Drug_Name[lid])
+    if (length(Gene1_Call)>0) {
+      Match_Data<-TMP_DATA[which(Gene1_diplotype==TMP_DATA$Gene1),]
+      if(dim(Match_Data)[1]>0){
+        if(Match_Data$Flag==1) {
+          YaoWu_Data<-c(YaoWu_Data,Match_Data$Drug)
+        }else if (Match_Data$Flag==2) {
+          BiaoZhun_Data<-c(BiaoZhun_Data,Match_Data$Drug)
+        }
+      }
+    }
+    if (Search_Drug_Name[lid] %in% Drug_Type$`ARBs Angiotensin II receptor blockers`) {
+      Comment2_Text<-Text_Paste(Match_Data)
+      #Drug_TmpTable<-data.frame(V1=c(Search_Drug_Name[lid]),V2=c("ARBs Angiotensin II receptor blockers"),V3=c(Match_Data$C1),V4=c(Match_Data$C2),stringsAsFactors = FALSE)
+      Drug_TmpTable<-data.frame(V1=c(Search_Drug_Name[lid]),V2=c("ARBs Angiotensin II receptor blockers"),V3=c(Match_Data$C1),V4=c(Comment2_Text),stringsAsFactors = FALSE)
+      Drug_Table_Info<-rbind(Drug_Table_Info,Drug_TmpTable)
+    }
+  }else if (Search_Drug_Name[lid]=="Candesartan") {
+    #"AGTR1"
+    TMP_DATA<-Total_Drug_Chinese[Search_Drug_Name[lid]==Total_Drug_Chinese$Drug,]
+    Gene1_Call<-Sample_Info[grep("AGTR1",Sample_Info$`Gene Symbol`),]$Call
+    Gene1_Call<-gsub("/","",Gene1_Call)
+    Gene1_Call_List<-unlist(strsplit(Gene1_Call,split=""))
+    Gene1_Call_Ver<-paste(Gene1_Call_List[2],Gene1_Call_List[1],sep="")
+    print(Search_Drug_Name[lid])
+    if (length(Gene1_Call)>0) {
+      Match_Data<-TMP_DATA[which(Gene1_Call==TMP_DATA$Gene1|Gene1_Call_Ver==TMP_DATA$Gene1),]
+      if(dim(Match_Data)[1]>0){
+        if(Match_Data$Flag==1) {
+          YaoWu_Data<-c(YaoWu_Data,Match_Data$Drug)
+        }else if (Match_Data$Flag==2) {
+          BiaoZhun_Data<-c(BiaoZhun_Data,Match_Data$Drug)
+        }
+      }
+    }
+    if (Search_Drug_Name[lid] %in% Drug_Type$`ARBs Angiotensin II receptor blockers`) {
+      Comment2_Text<-Text_Paste(Match_Data)
+      #Drug_TmpTable<-data.frame(V1=c(Search_Drug_Name[lid]),V2=c("ARBs Angiotensin II receptor blockers"),V3=c(Match_Data$C1),V4=c(Match_Data$C2),stringsAsFactors = FALSE)
+      Drug_TmpTable<-data.frame(V1=c(Search_Drug_Name[lid]),V2=c("ARBs Angiotensin II receptor blockers"),V3=c(Match_Data$C1),V4=c(Comment2_Text),stringsAsFactors = FALSE)
+      Drug_Table_Info<-rbind(Drug_Table_Info,Drug_TmpTable)
+    }
+  }else if (Search_Drug_Name[lid]=="CCB Calcium Antagonists Calcium Channel Blockers") {
+    #"rs2238032"
+    TMP_DATA<-Total_Drug_Chinese[Search_Drug_Name[lid]==Total_Drug_Chinese$Drug,]
+    Gene1_Call<-Sample_Info[grep("rs2238032",Sample_Info$`NCBI SNP Reference`),]$Call
+    Gene1_Call<-gsub("/","",Gene1_Call)
+    Gene1_Call_List<-unlist(strsplit(Gene1_Call,split=""))
+    Gene1_Call_Ver<-paste(Gene1_Call_List[2],Gene1_Call_List[1],sep="")
+    print(Search_Drug_Name[lid])
+    if (length(Gene1_Call)>0) {
+      Match_Data<-TMP_DATA[which(Gene1_Call==TMP_DATA$Gene1|Gene1_Call_Ver==TMP_DATA$Gene1),]
+    }
+    if (Search_Drug_Name[lid] %in% Drug_Type$`CCB Calcium Antagonists Calcium Channel Blockers`) {
+      Comment2_Text<-Text_Paste(Match_Data)
+      #Drug_TmpTable<-data.frame(V1=c(Search_Drug_Name[lid]),V2=c("CCB Calcium Antagonists Calcium Channel Blockers"),V3=c(Match_Data$C1),V4=c(Match_Data$C2),stringsAsFactors = FALSE)
+      Drug_TmpTable<-data.frame(V1=c(Search_Drug_Name[lid]),V2=c("CCB Calcium Antagonists Calcium Channel Blockers"),V3=c(Match_Data$C1),V4=c(Comment2_Text),stringsAsFactors = FALSE)
+      Drug_Table_Info<-rbind(Drug_Table_Info,Drug_TmpTable)
+    }
+  }else if (Search_Drug_Name[lid]=="Amlodipine") {
+    #rs776746
+    TMP_DATA<-Total_Drug_Chinese[Search_Drug_Name[lid]==Total_Drug_Chinese$Drug,]
+    Gene1_Call<-Sample_Info[grep("rs2238032",Sample_Info$`NCBI SNP Reference`),]$Call
+    Gene1_Call<-gsub("/","",Gene1_Call)
+    Gene1_Call_List<-unlist(strsplit(Gene1_Call,split=""))
+    Gene1_Call_Ver<-paste(Gene1_Call_List[2],Gene1_Call_List[1],sep="")
+    Call_Set<-TMP_DATA$Gene1[2:dim(TMP_DATA)[1]]
+    print(Search_Drug_Name[lid])
+    if (length(Gene1_Call)>0) {
+      if (Gene1_Call %in% Call_Set) {
+        Match_Data<-TMP_DATA[which(Gene1_Call==TMP_DATA$Gene1|Gene1_Call_Ver==TMP_DATA$Gene1),]
+        if(Match_Data$Flag==1) {
+          YaoWu_Data<-c(YaoWu_Data,Match_Data$Drug)
+        }else if (Match_Data$Flag==2) {
+          BiaoZhun_Data<-c(BiaoZhun_Data,Match_Data$Drug)
+        }
+      }
+    }
+    if (Search_Drug_Name[lid] %in% Drug_Type$`CCB Calcium Antagonists Calcium Channel Blockers`) {
+      Comment2_Text<-Text_Paste(Match_Data)
+      #Drug_TmpTable<-data.frame(V1=c(Search_Drug_Name[lid]),V2=c("CCB Calcium Antagonists Calcium Channel Blockers"),V3=c(Match_Data$C1),V4=c(Match_Data$C2),stringsAsFactors = FALSE)
+      Drug_TmpTable<-data.frame(V1=c(Search_Drug_Name[lid]),V2=c("CCB Calcium Antagonists Calcium Channel Blockers"),V3=c(Match_Data$C1),V4=c(Comment2_Text),stringsAsFactors = FALSE)
+      Drug_Table_Info<-rbind(Drug_Table_Info,Drug_TmpTable)
+    }
+  }else if (Search_Drug_Name[lid]=="Nifedipine") {
+    #rs776746
+    TMP_DATA<-Total_Drug_Chinese[Search_Drug_Name[lid]==Total_Drug_Chinese$Drug,]
+    Gene1_Call<-Sample_Info[grep("rs2238032",Sample_Info$`NCBI SNP Reference`),]$Call
+    Gene1_Call<-gsub("/","",Gene1_Call)
+    Call_Set<-TMP_DATA$Gene1[2:dim(TMP_DATA)[1]]
+    print(Search_Drug_Name[lid])
+    if (length(Gene1_Call)>0) {
+      if (Gene1_Call %in% Call_Set) {
+        Match_Data<-TMP_DATA[which(Gene1_Call==TMP_DATA$Gene1),]
+        if(Match_Data$Flag==1) {
+          YaoWu_Data<-c(YaoWu_Data,Match_Data$Drug)
+        }else if (Match_Data$Flag==2) {
+          BiaoZhun_Data<-c(BiaoZhun_Data,Match_Data$Drug)
+        }
+      }
+    }
+    if (Search_Drug_Name[lid] %in% Drug_Type$`CCB Calcium Antagonists Calcium Channel Blockers`) {
+      Comment2_Text<-Text_Paste(Match_Data)
+      #Drug_TmpTable<-data.frame(V1=c(Search_Drug_Name[lid]),V2=c("CCB Calcium Antagonists Calcium Channel Blockers"),V3=c(Match_Data$C1),V4=c(Match_Data$C2),stringsAsFactors = FALSE)
+      Drug_TmpTable<-data.frame(V1=c(Search_Drug_Name[lid]),V2=c("CCB Calcium Antagonists Calcium Channel Blockers"),V3=c(Match_Data$C1),V4=c(Comment2_Text),stringsAsFactors = FALSE)
+      Drug_Table_Info<-rbind(Drug_Table_Info,Drug_TmpTable)
+    }
+  }else if (Search_Drug_Name[lid]=="Verapamil") {
+    #"CACNA1C" "ABCB1"
+    TMP_DATA<-Total_Drug_Chinese[Search_Drug_Name[lid]==Total_Drug_Chinese$Drug,]
+    Gene1_Call<-Sample_Info[grep("CACNA1C",Sample_Info$`Gene Symbol`),]$Call
+    Gene1_Call<-gsub("/","",Gene1_Call)
+    Gene1_CallSet<-TMP_DATA$Gene1[2:dim(TMP_DATA)[1]]
+    Gene2_Call<-Sample_Info[grep("ABCB1",Sample_Info$`Gene Symbol`),]$Call
+    Gene2_Call<-gsub("/","",Gene2_Call)
+    Gene2_CallSet<-TMP_DATA$Gene2[2:dim(TMP_DATA)[1]]
+    print(Search_Drug_Name[lid])
+    if ((Gene1_Call %in% Gene1_CallSet)&(Gene2_Call %in% Gene2_CallSet)) {
+      Match_Data<-TMP_DATA[which(Gene1_Call==TMP_DATA$Gene1&Gene2_Call==TMP_DATA$Gene2),]
+      if(Match_Data$Flag==1) {
+        YaoWu_Data<-c(YaoWu_Data,Match_Data$Drug)
+      }else if (Match_Data$Flag==2) {
+        BiaoZhun_Data<-c(BiaoZhun_Data,Match_Data$Drug)
+      }
+    }
+    if (Search_Drug_Name[lid] %in% Drug_Type$`CCB Calcium Antagonists Calcium Channel Blockers`) {
+      Comment2_Text<-Text_Paste(Match_Data)
+      #Drug_TmpTable<-data.frame(V1=c(Search_Drug_Name[lid]),V2=c("CCB Calcium Antagonists Calcium Channel Blockers"),V3=c(Match_Data$C1),V4=c(Match_Data$C2),stringsAsFactors = FALSE)
+      Drug_TmpTable<-data.frame(V1=c(Search_Drug_Name[lid]),V2=c("CCB Calcium Antagonists Calcium Channel Blockers"),V3=c(Match_Data$C1),V4=c(Comment2_Text),stringsAsFactors = FALSE)
+      Drug_Table_Info<-rbind(Drug_Table_Info,Drug_TmpTable)
+    }
+  }else if (Search_Drug_Name[lid]=="Hydrochlorothiazide") {
+    #"NEDD4L" "KCNJ1"
+    TMP_DATA<-Total_Drug_Chinese[Search_Drug_Name[lid]==Total_Drug_Chinese$Drug,]
+    Gene1_Call<-Sample_Info[grep("NEDD4L",Sample_Info$`Gene Symbol`),]$Call
+    Gene1_Call<-gsub("/","",Gene1_Call)
+    Gene1_CallSet<-unique(TMP_DATA$Gene1[2:dim(TMP_DATA)[1]])
+    Gene2_Call<-Sample_Info[grep("KCNJ1",Sample_Info$`Gene Symbol`),]$Call
+    Gene2_Call<-gsub("/","",Gene2_Call)
+    Gene2_CallSet<-unique(TMP_DATA$Gene2[2:dim(TMP_DATA)[1]])
+    print(Search_Drug_Name[lid])
+    if ((Gene1_Call %in% Gene1_CallSet)&(Gene2_Call %in% Gene2_CallSet)) {
+      Match_Data<-TMP_DATA[which(Gene1_Call==TMP_DATA$Gene1&Gene2_Call==TMP_DATA$Gene2),]
+      if(Match_Data$Flag==1) {
+        YaoWu_Data<-c(YaoWu_Data,Match_Data$Drug)
+      }else if (Match_Data$Flag==2) {
+        BiaoZhun_Data<-c(BiaoZhun_Data,Match_Data$Drug)
+      }
+      if (Match_Data$FXout=="Yes") {
+        FengXian_Data<-c(FengXian_Data,"HCTZ-induced dysglycemia and NOD")
+      }
+    }
+    if (Search_Drug_Name[lid] %in% Drug_Type$`Diuretics`) {
+      Comment2_Text<-Text_Paste(Match_Data)
+      #Drug_TmpTable<-data.frame(V1=c(Search_Drug_Name[lid]),V2=c("Diuretics"),V3=c(Match_Data$C1),V4=c(Match_Data$C2),stringsAsFactors = FALSE)
+      Drug_TmpTable<-data.frame(V1=c(Search_Drug_Name[lid]),V2=c("Diuretics"),V3=c(Match_Data$C1),V4=c(Comment2_Text),stringsAsFactors = FALSE)
+      Drug_Table_Info<-rbind(Drug_Table_Info,Drug_TmpTable)
+    }
+  }else if (Search_Drug_Name[lid]=="Spironolactone") {
+    #"ADD1"
+    TMP_DATA<-Total_Drug_Chinese[Search_Drug_Name[lid]==Total_Drug_Chinese$Drug,]
+    Gene1_Call<-Sample_Info[grep("ADD1",Sample_Info$`Gene Symbol`),]$Call
+    Gene1_Call<-gsub("/","",Gene1_Call)
+    Gene1_CallSet<-unique(TMP_DATA$Gene1[2:dim(TMP_DATA)[1]])
+    print(Search_Drug_Name[lid])
+    if (Gene1_Call %in% Gene1_CallSet) {
+      Match_Data<-TMP_DATA[which(Gene1_Call==TMP_DATA$Gene1),]
+      if(Match_Data$Flag==1) {
+        YaoWu_Data<-c(YaoWu_Data,Match_Data$Drug)
+      }else if (Match_Data$Flag==2) {
+        BiaoZhun_Data<-c(BiaoZhun_Data,Match_Data$Drug)
+      }
+    }
+    if (Search_Drug_Name[lid] %in% Drug_Type$`Diuretics`) {
+      Comment2_Text<-Text_Paste(Match_Data)
+      #Drug_TmpTable<-data.frame(V1=c(Search_Drug_Name[lid]),V2=c("Diuretics"),V3=c(Match_Data$C1),V4=c(Match_Data$C2),stringsAsFactors = FALSE)
+      Drug_TmpTable<-data.frame(V1=c(Search_Drug_Name[lid]),V2=c("Diuretics"),V3=c(Match_Data$C1),V4=c(Comment2_Text),stringsAsFactors = FALSE)
+      Drug_Table_Info<-rbind(Drug_Table_Info,Drug_TmpTable)
+    }
+  }else if (Search_Drug_Name[lid]=="Chlorthalidone") {
+    #"ACE"#"Diuretics"=c("Hydrochlorothiazide","Spironolactone","Chlorthalidone"),
+    TMP_DATA<-Total_Drug_Chinese[Search_Drug_Name[lid]==Total_Drug_Chinese$Drug,]
+    Gene1_Call<-Sample_Info[grep("ACE",Sample_Info$`Gene Symbol`),]$Call
+    Gene1_Call<-gsub("/","",Gene1_Call)
+    Gene1_CallSet<-unique(TMP_DATA$Gene1[2:dim(TMP_DATA)[1]])
+    print(Search_Drug_Name[lid])
+    if (Gene1_Call %in% Gene1_CallSet) {
+      Match_Data<-TMP_DATA[which(Gene1_Call==TMP_DATA$Gene1),]
+      if(Match_Data$Flag==1) {
+        YaoWu_Data<-c(YaoWu_Data,Match_Data$Drug)
+      }else if (Match_Data$Flag==2) {
+        BiaoZhun_Data<-c(BiaoZhun_Data,Match_Data$Drug)
+      }
+      if ((!is.na(Match_Data$FXout))&(Match_Data$FXout=="Yes")) {
+        FengXian_Data<-c(FengXian_Data,"HCTZ-induced dysglycemia and NOD")
+      }
+    }
+    if (Search_Drug_Name[lid] %in% Drug_Type$`Diuretics`) {
+      Comment2_Text<-Text_Paste(Match_Data)
+      #Drug_TmpTable<-data.frame(V1=c(Search_Drug_Name[lid]),V2=c("Diuretics"),V3=c(Match_Data$C1),V4=c(Match_Data$C2),stringsAsFactors = FALSE)
+      Drug_TmpTable<-data.frame(V1=c(Search_Drug_Name[lid]),V2=c("Diuretics"),V3=c(Match_Data$C1),V4=c(Comment2_Text),stringsAsFactors = FALSE)
+      Drug_Table_Info<-rbind(Drug_Table_Info,Drug_TmpTable)
+    }
+  }else if (Search_Drug_Name[lid]=="Folic Acid") {
+    #"rs1801133" "Adjuvant Drug"=c("Folic Acid")
+    TMP_DATA<-Total_Drug_Chinese[Search_Drug_Name[lid]==Total_Drug_Chinese$Drug,]
+    Gene1_Call<-Sample_Info[grep("rs1801133",Sample_Info$`NCBI SNP Reference`),]$Call
+    Gene1_Call<-gsub("/","",Gene1_Call)
+    Call_Set<-unique(TMP_DATA$Gene1[2:dim(TMP_DATA)[1]])
+    print(Search_Drug_Name[lid])
+    if (Gene1_Call %in% Gene1_CallSet) {
+      Match_Data<-TMP_DATA[which(Gene1_Call==TMP_DATA$Gene1),]
+      if ((!is.na(Match_Data$FXout))&(Match_Data$FXout=="Yes")) {
+        FengXian_Data<-c(FengXian_Data,"Hyperhomocysteinaemia")
+      }
+    }
+    if (Search_Drug_Name[lid] %in% Drug_Type$`Adjuvant Drug`) {
+      Comment2_Text<-Text_Paste(Match_Data)
+      #Drug_TmpTable<-data.frame(V1=c(Search_Drug_Name[lid]),V2=c("Adjuvant Drug"),V3=c(Match_Data$C1),V4=c(Match_Data$C2),stringsAsFactors = FALSE)
+      Drug_TmpTable<-data.frame(V1=c(Search_Drug_Name[lid]),V2=c("Adjuvant Drug"),V3=c(Match_Data$C1),V4=c(Comment2_Text),stringsAsFactors = FALSE)
+      Drug_Table_Info<-rbind(Drug_Table_Info,Drug_TmpTable)
+    }
+  }
+}
+colnames(Drug_Table_Info)<-c("Drug","Type","Comment1","Comment2")
+
+Combine_Vector<-function(Data){
+  Vector_Str<-paste(Data[1],Data[2],sep=",")
+  for (i in seq.int(from = 3,to=length(Data))) {
+    Vector_Str<-paste(Vector_Str,Data[i],sep=",")
+  }
+  return(Vector_Str)
+}
+YaoWu_Data<-unlist(strsplit(YaoWu_Data,split = " "))
+BiaoZhun_Data<-unlist(strsplit(BiaoZhun_Data,split = " "))
+Table0<-data.frame(V1=c("Pharmacogenomic Interactions","Standard Prescription Recommended"),V2=c(Combine_Vector(YaoWu_Data),Combine_Vector(BiaoZhun_Data)))
+Table1<-data.frame(V1=rep("Caution",length(FengXian_Data)),V2=FengXian_Data)
+Table_Summary<-rbind(Table0,Table1)
+
+Table_Generate<-function(YaoWu_Data,BiaoZhun_Data,FengXian_Data){
+  YW_TEXT<-"Pharmacogenomic Interactions"
+  BZ_TEXT<-"Standard Prescription Recommended"
+  FX_TEXT<-"Caution"
+  if(length(BiaoZhun_Data)>2){
+    BiaoZhun_Element<-c(BiaoZhun_Data,rep("",ceiling(length(BiaoZhun_Data)/2)*2-length(BiaoZhun_Data)))
+    BZRNum<-ceiling(length(BiaoZhun_Data)/2)
+  }else{
+    BiaoZhun_Element<-c(BiaoZhun_Data,rep("",ceiling(length(BiaoZhun_Data)/2)*2-length(BiaoZhun_Data)))
+    BZRNum<-1
+  }
+  RowNum_BZFX<-BZRNum+length(FengXian_Data)+2
+  ColNum_YW<-ceiling(length(YaoWu_Data)/(RowNum_BZFX-1))
+  YaoWu_Element<-c(YaoWu_Data,rep("",ColNum_YW*(RowNum_BZFX-1)-length(YaoWu_Data)))
+  YaoWu_DF<-as.data.frame(matrix(c(YaoWu_Element),nrow=(RowNum_BZFX-1),byrow=TRUE),stringsAsFactors=FALSE)
+  colnames(YaoWu_DF)<-c(YW_TEXT,paste("Y",seq(ColNum_YW-1)))
+  BiaoZhun_DF<-as.data.frame(matrix(c(BiaoZhun_Element),ncol=2,byrow=TRUE),stringsAsFactors=FALSE)
+  colnames(BiaoZhun_DF)<-c("V1","V2")
+  FengXian_DF<-as.data.frame(matrix(c(FX_TEXT,FengXian_Data),nrow=(length(FengXian_Data)+1),byrow=FALSE),stringsAsFactors=FALSE)
+  colnames(FengXian_DF)<-c("V1")
+  FengXian_DF$V2<-rep("",dim(FengXian_DF)[1])
+  BZFX_DF<-rbind(BiaoZhun_DF,FengXian_DF)
+  colnames(BZFX_DF)<-c(BZ_TEXT,"B2")
+  Table0<-cbind(YaoWu_DF,BZFX_DF)
+  return(Table0)
+}
+#########################################Drug Information Ending###############################
+
+#################################
+#Table2<-read_excel("Drug_Summary_Table.xlsx")
+#Table2<-as.data.frame(Table2)
+Drug_Category_Order<-c("β-receptor blocker","ACE inhibitor","ARBs Angiotensin II receptor blockers","Diuretics","CCB Calcium Antagonists Calcium Channel Blockers","Adjuvant Drug")
+#Drug_Uniq<-unique(Table2$Durg)
+
+Generate_DrugTable<-function(Table){
+Drug_Table<-data.frame(stringsAsFactors = FALSE)
+RB_Num<-0
+ARBs_Num<-0
+CCB_Num<-0
+DIU_Num<-0
+AdDrug_Num<-0  
+for (i in seq(dim(Table)[1])) {
+  #print(drug)
+  if(Table[i,]$Type=="β-receptor blocker"){
+    RB_Num<-RB_Num+1
+    if(RB_Num==1) {
+      TMP_Category<-data.frame(V1=paste(Table[i,]$Type,"label",sep=""),V2="",stringsAsFactors = FALSE)
+      Drug_Table<-rbind(Drug_Table,TMP_Category)
+    }
+  }
+  else if(Table[i,]$Type=="ACE inhibitor"){
+    ACE_Num<-ACE_Num+1
+    if(ACE_Num==1){
+      TMP_Category<-data.frame(V1=Table[i,]$Type,V2="",stringsAsFactors = FALSE)
+      Drug_Table<-rbind(Drug_Table,TMP_Category)
+    }
+  }
+  else if(Table[i,]$Type=="ARBs Angiotensin II receptor blockers") {
+    ARBs_Num<-ARBs_Num+1
+    if(ARBs_Num==1){
+      TMP_Category<-data.frame(V1=Table[i,]$Type,V2="",stringsAsFactors = FALSE)
+      Drug_Table<-rbind(Drug_Table,TMP_Category)
+    }
+  }
+  else if (Table[i,]$Type=="Diuretics") {
+    DIU_Num<-DIU_Num+1
+    if(DIU_Num==1) {
+      TMP_Category<-data.frame(V1=Table[i,]$Type,V2="",stringsAsFactors = FALSE)
+      Drug_Table<-rbind(Drug_Table,TMP_Category)
+    }
+  }
+  else if(Table[i,]$Type=="CCB Calcium Antagonists Calcium Channel Blockers"){
+    CCB_Num<-CCB_Num+1
+    if (CCB_Num==1) {
+      TMP_Category<-data.frame(V1=paste(Table[i,]$Type,"label",sep=""),V2="",stringsAsFactors = FALSE)
+      Drug_Table<-rbind(Drug_Table,TMP_Category)
+    }
+  }
+  else if(Table[i,]$Type=="Adjuvant Drug") {
+    AdDrug_Num<-AdDrug_Num+1
+    if (AdDrug_Num==1) {
+      TMP_Category<-data.frame(V1=Table[i,]$Type,V2="",stringsAsFactors = FALSE)
+      Drug_Table<-rbind(Drug_Table,TMP_Category)
+    }
+  }
+  if (grepl("\r\n",Table[1,]$Comment1)) {
+    TMP_Content0<-unlist(strsplit(Table[i,]$Comment1,"\r\n"))
+    for (ZhuShi in TMP_Content0) {
+      TMP_Content<-data.frame(V1=c(Table[i,]$Drug),V2=c(ZhuShi),stringsAsFactors = FALSE)
+      Drug_Table<-rbind(Drug_Table,TMP_Content)
+    }
+  }else{
+    TMP_Content<-data.frame(V1=c(Table[i,]$Drug),V2=c(Table[i,]$Comment1),stringsAsFactors = FALSE)
+    Drug_Table<-rbind(Drug_Table,TMP_Content)
+  }
+  #TMP_Content<-data.frame(V1=c(rep(Table2[i,]$Drug,2)),V2=c(Table2[i,]$Comment1,Table2[i,]$Commnet2))
+  TMP_Text<-data.frame(V1=c(Table[i,]$Drug),V2=c(Table[i,]$Comment2),stringsAsFactors = FALSE)
+  #Drug_Table<-rbind(Drug_Table,TMP_Content)
+  Drug_Table<-rbind(Drug_Table,TMP_Text)
+}
+colnames(Drug_Table)<-c("Medication","Comment")
+return(Drug_Table)
+}
+Drug_Table<-Generate_DrugTable(Drug_Table_Info)#Table2
+
+#######################################Gene Phenotype Information#####################################
+Total_Gene_Analysis<-read_excel("gene_English.xlsx")
+Total_Gene_Analysis<-as.data.frame(Total_Gene_Analysis)
+colnames(Total_Gene_Analysis)<-c("GENE","Analyte","GENETYPE","GENETYPE2","Phenotype","Result","Text")
+Total_Gene_Analysis$GENETYPE<-gsub("/","",Total_Gene_Analysis$GENETYPE)
+#Sample_Gene_list_Info<-read_excel("Sample_Gene_List.xlsx")
+#Sample_Gene_list_Info<-as.data.frame(Sample_Gene_list_Info)
+
+#CYP_GENE_list<-c("CYP2C19","CYP2C9","CYP3A4","CYP3A5","CYP4F2","CYP2D6")
+
+Generate_GeneInfo<-function(Sample_Info,Total_Gene_Summary,GXY_Gene_List){
+  CYP_GENE_list<-c("CYP2C19","CYP2C9","CYP3A4","CYP3A5","CYP4F2","CYP2D6")
+  Final_Gene_Info<-data.frame(stringsAsFactors = FALSE)
+  Sample_Gene_List<-unique(Sample_Info$`Gene Symbol`)
+  for (Gid in seq.int(from=1,to=length(Sample_Gene_List),by=1)) {
+    Search_GENE<-Sample_Gene_List[Gid]
+    if(Search_GENE %in% GXY_Gene_List){
+      Sample_Gene_Data<-Sample_Info[grep(paste(Search_GENE,"$",sep=""),Sample_Info$`Gene Symbol`),]
+      GENE_TMP_INFO<-Total_Gene_Summary[grep(paste(Search_GENE,"$",sep=""),Total_Gene_Summary$GENE),]
+      if (Search_GENE %in% CYP_GENE_list) {
+        GENE_TMP_Genotype<-unique(Sample_Gene_Data$diplotype)
+        GENE_TMP_Phenotype<-unique(Sample_Gene_Data$phenotype)
+        TMP_DATA<-data.frame(V1=c(Search_GENE),V2=c(GENE_TMP_Genotype),V3=c(""),V4=c(GENE_TMP_Phenotype),stringsAsFactors = FALSE)
+        Final_Gene_Info<-rbind(Final_Gene_Info,TMP_DATA)
+      }else{
+        RS_SNP_List<-unlist(strsplit(GENE_TMP_INFO[1,2],split=" "))
+
+        if (length(RS_SNP_List)==2) {
+          #if (dim(Sample_Gene_Data)[1]==1) {
+            Search_Call<-Sample_Gene_Data[Sample_Gene_Data$`NCBI SNP Reference`==RS_SNP_List[2],]$Call
+            #Search_Call<-gsub("/","",Search_Call)
+            
+            print(Search_GENE)
+            print(Search_Call)
+            if (length(Search_Call)>0){
+              TMP_DATA<-data.frame(V1=c(Search_GENE),V2=c(Search_Call),V3=c(""),V4=c(""),stringsAsFactors = FALSE)
+              Final_Gene_Info<-rbind(Final_Gene_Info,TMP_DATA)
+            }else{print(paste(Search_GENE,"not match.",sep=" "))}
+          #}
+        }else if (length(RS_SNP_List)==3) {
+            if (dim(Sample_Gene_Data)[1]==2) {
+              #Search_Call1_Data<-Sample_Gene_Data[Sample_Gene_Data$`NCBI SNP Reference`==RS_SNP_List[2],]
+              Search_Call1<-Sample_Gene_Data[Sample_Gene_Data$`NCBI SNP Reference`==RS_SNP_List[2],]$Call
+              #Search_Call1<-gsub("/","",Search_Call1)
+              #Search_Call2_Data<-Sample_Gene_Data[Sample_Gene_Data$`NCBI SNP Reference`==RS_SNP_List[3],]
+              Search_Call2<-Sample_Gene_Data[Sample_Gene_Data$`NCBI SNP Reference`==RS_SNP_List[3],]$Call
+              #Search_Call2<-gsub("/","",Search_Call2)
+              if (length(Search_Call1)>0&length(Search_Call2)>0) {
+                TMP_DATA<-data.frame(V1=c(Search_GENE),V2=c(Search_Call1),V3=c(Search_Call2),V4=c(""),stringsAsFactors = FALSE)
+                Final_Gene_Info<-rbind(Final_Gene_Info,TMP_DATA)
+              }
+            }
+          }
+      }
+    }
+  }
+  colnames(Final_Gene_Info)<-c("GENE","GENETYPE","GENETYPE2","PHENOTYPE")
+  Final_Gene_Info<-rbind(Final_Gene_Info[grep("CYP",Final_Gene_Info$GENE),],Final_Gene_Info[-grep("CYP",Final_Gene_Info$GENE),])
+  return(Final_Gene_Info)
+}
+
+Generate_Gene_Table<-function(Sample_Gene_list_Info,Total_Gene_Analysis){
+CYP_GENE_list<-c("CYP2C19","CYP2C9","CYP3A4","CYP3A5","CYP4F2","CYP2D6") 
+Gene_Phenotype_Table<-data.frame(stringsAsFactors = FALSE)
+for (i in seq(dim(Sample_Gene_list_Info)[1])) {
+  #print(i)
+  Gene<-Sample_Gene_list_Info[i,]$GENE
+  
+  if (Gene %in% CYP_GENE_list) {
+    print("CYP Gene")
+    print(Gene)
+    print(Sample_Gene_list_Info[i,]$GENETYPE)
+    TMP_GENE_DATA<-Total_Gene_Analysis[Total_Gene_Analysis$GENE==Gene,]
+    #TMP_GENE_TYPE<-unlist(strsplit(Sample_Gene_list_Info[i,]$GENETYPE,split=";"))
+    if (Sample_Gene_list_Info[i,]$PHENOTYPE=="nan") {
+      Sample_Gene_list_Info[i,]$PHENOTYPE<-""
+    }
+    if(Sample_Gene_list_Info[i,]$PHENOTYPE!=""){
+      Phenotype_Rindex<-which(Sample_Gene_list_Info[i,]$PHENOTYPE==TMP_GENE_DATA$Phenotype)
+      print("%%%%%%%%%%")
+      print(Phenotype_Rindex)
+      print(Total_Gene_Analysis[Phenotype_Rindex,]$Result)
+      print(Total_Gene_Analysis[Phenotype_Rindex,]$Text)
+    #if(length(Phenotype_Rindex)>0){
+      if(is.na(TMP_GENE_DATA[Phenotype_Rindex,]$Result)){TMP_GENE_DATA[Phenotype_Rindex,]$Result<-""}
+      if(is.na(TMP_GENE_DATA[Phenotype_Rindex,]$Text)){TMP_GENE_DATA[Phenotype_Rindex,]$Text<-""}
+      TMP_CYP_DF<-data.frame(V1=c(paste(Gene,"Genotype",sep=" "),paste(Gene,"Phenotype ",sep=" "),""),V2=c(Sample_Gene_list_Info[i,]$GENETYPE,TMP_GENE_DATA[Phenotype_Rindex,]$Result,TMP_GENE_DATA[Phenotype_Rindex,]$Text),stringsAsFactors=FALSE)
+      Gene_Phenotype_Table<-rbind(Gene_Phenotype_Table,TMP_CYP_DF)
+    }
+  }
+  else{
+    #print("Not CYP Gene")
+    Gene_Content_Rindex<-which(Gene==Total_Gene_Analysis$GENE&c(!is.na(Total_Gene_Analysis$Analyte)))
+    Gene_Content<-Total_Gene_Analysis[Gene_Content_Rindex,]$Analyte
+    TMP_Analyte<-unlist(strsplit(Gene_Content,split=" "))
+    
+    for (j in seq.int(from=2,to=length(TMP_Analyte))) {
+      TMP_GENE_INFO<-""
+      TMP_CHAR<-unlist(strsplit(TMP_Analyte[j],split=""))
+      if (nchar(TMP_Analyte[j])>5) {
+        YinChang_Len<-nchar(TMP_Analyte[j])-4
+        #print(TMP_Analyte[j])
+        #print(YinChang_Len)
+        for (h in seq.int(from=1,to=YinChang_Len,by=1)) {
+          TMP_GENE_INFO<-str_c(TMP_GENE_INFO,TMP_CHAR[h],sep="")
+        }
+        TMP_GENE_INFO<-str_trim(TMP_GENE_INFO)
+        TMP_Analyte[j]<-str_c(TMP_GENE_INFO,"****",sep = "")
+        #print(TMP_Analyte[j])
+      }else{
+        TMP_GENE_INFO<-str_c(TMP_GENE_INFO,TMP_CHAR[1],TMP_CHAR[2],"****",sep="")
+        TMP_Analyte[j]<-str_trim(TMP_GENE_INFO)
+      }
+      
+    }
+    Gene_OUT<-''
+    for (k in TMP_Analyte) {
+      Gene_OUT<-str_c(Gene_OUT,k,sep=" ")
+    }
+    #TMP_Analyte<-unlist(strsplit())
+    Text_Rindex<-which(Gene==Total_Gene_Analysis$GENE&c(!is.na(Total_Gene_Analysis$Text)))
+    if ((Sample_Gene_list_Info[i,]$GENETYPE2=="")|(is.na(Sample_Gene_list_Info[i,]$GENETYPE2))) {
+      if (grepl("/",Sample_Gene_list_Info[i,]$GENETYPE)) {
+        Search_GeneType<-gsub("/","",Sample_Gene_list_Info[i,]$GENETYPE)
+      }else{
+        Search_GeneType<-Sample_Gene_list_Info[i,]$GENETYPE
+      }
+      Search_GeneType_List<-unlist(strsplit(Search_GeneType,split=""))
+      Search_GeneType_Ver<-paste(Search_GeneType_List[2],Search_GeneType_List[1],sep="")
+      TMP_Result_Rindex<-which(Gene==Total_Gene_Analysis$GENE&(Search_GeneType==Total_Gene_Analysis$GENETYPE|Search_GeneType_Ver==Total_Gene_Analysis$GENETYPE))
+      print("Single---")
+      print(Gene)
+      print(c(TMP_GENE_INFO,"Genotype",""))
+      print(Sample_Gene_list_Info[i,]$GENETYPE)
+      print(c(Search_GeneType,TMP_Result_Rindex))
+      print(Total_Gene_Analysis[TMP_Result_Rindex,]$Result)
+      print(Total_Gene_Analysis[Text_Rindex,]$Text)
+      TMP_DF<-data.frame(V1=c(Gene_OUT,"Genotype",""),V2=c(Sample_Gene_list_Info[i,]$GENETYPE,Total_Gene_Analysis[TMP_Result_Rindex,]$Result,Total_Gene_Analysis[Text_Rindex,]$Text),stringsAsFactors=FALSE)
+      Gene_Phenotype_Table<-rbind(Gene_Phenotype_Table,TMP_DF)
+    }
+    else{
+      Search_GeneType<-gsub("/","",Sample_Gene_list_Info[i,]$GENETYPE)
+      Search_GeneType2<-gsub("/","",Sample_Gene_list_Info[i,]$GENETYPE2)
+      
+      Search_GeneType_List<-unlist(strsplit(Search_GeneType,split=""))
+      Search_GeneType_Ver<-paste(Search_GeneType_List[2],Search_GeneType_List[1],sep="")
+      Search_GeneType2_List<-unlist(strsplit(Search_GeneType2,split=""))
+      Search_GeneType2_Ver<-paste(Search_GeneType2_List[2],Search_GeneType2_List[1],sep="")
+      print("Two---")
+      print(Gene)
+      print(c(TMP_GENE_INFO,"Genotype",""))
+      print(Sample_Gene_list_Info[i,]$GENETYPE)
+      print(c(Search_GeneType,TMP_Result_Rindex))
+      print(Total_Gene_Analysis[TMP_Result_Rindex,]$Result)
+      print(Total_Gene_Analysis[Text_Rindex,]$Text)
+      print("######")
+      print(Gene_OUT)
+      print(Sample_Gene_list_Info[i,]$GENETYPE)
+      print(Sample_Gene_list_Info[i,]$GENETYPE2)
+      print(Total_Gene_Analysis[TMP_Result_Rindex,]$Result)
+      print(Total_Gene_Analysis[Text_Rindex,]$Text)
+      #print("******")
+      #print(length(c(Gene_OUT,"Genotype","")))
+      #print(length(c(paste(Sample_Gene_list_Info[i,]$GENETYPE,Sample_Gene_list_Info[i,]$GENETYPE2,sep=","),Total_Gene_Analysis[TMP_Result_Rindex,]$Result,Total_Gene_Analysis[Text_Rindex,]$Text)))
+      #TMP_Result_Rindex<-which(Gene==Total_Gene_Analysis$GENE&(Search_GeneType==Total_Gene_Analysis$GENETYPE|Search_GeneType==Total_Gene_Analysis$GENETYPE2)&(Search_GeneType2==Total_Gene_Analysis$GENETYPE2|Search_GeneType2==Total_Gene_Analysis$GENETYPE))
+      TMP_Result_Rindex<-which(Gene==Total_Gene_Analysis$GENE&(Search_GeneType==Total_Gene_Analysis$GENETYPE|Search_GeneType_Ver==Total_Gene_Analysis$GENETYPE)&(Search_GeneType2==Total_Gene_Analysis$GENETYPE2|Search_GeneType2_Ver==Total_Gene_Analysis$GENETYPE2))
+      TMP_DF<-data.frame(V1=c(Gene_OUT,"Genotype",""),V2=c(paste(Sample_Gene_list_Info[i,]$GENETYPE,Sample_Gene_list_Info[i,]$GENETYPE2,sep=","),Total_Gene_Analysis[TMP_Result_Rindex,]$Result,Total_Gene_Analysis[Text_Rindex,]$Text),stringsAsFactors=FALSE)
+      Gene_Phenotype_Table<-rbind(Gene_Phenotype_Table,TMP_DF)
+    }
+  }
+}
+colnames(Gene_Phenotype_Table)<-c("Analyte","Result")
+return(Gene_Phenotype_Table)
+}
+
+Sample_Gene_list_Info<-Generate_GeneInfo(Sample_Info = Sample_Info,Total_Gene_Summary=Total_Gene_Analysis,GXY_Gene_List = GaoXueYa_Gene_List)
+Gene_Phenotype_Table<-Generate_Gene_Table(Sample_Gene_list_Info=Sample_Gene_list_Info,Total_Gene_Analysis=Total_Gene_Analysis)
+#####################################Gene Phenotype Ending###########################################
+
+######################Table flextable print out#######################
+Summary_Table_Print0<-function(data){
+  YW_TEXT<-"Pharmacogenomic Interactions"
+  BZ_TEXT<-"Standard Prescription Recommended"
+  FX_TEXT<-"Caution"
+  COLNum_YW<-dim(data)[2]-2
+  COLNum_BZ<-COLNum_YW+1
+  Each_Cell_Len<-7.1/dim(data)[2]
+  ROWNum_FX<-which(data[,COLNum_BZ]==FX_TEXT)
+  #typology<-data.frame(col_keys=colnames(data),Change=c(rep(YW_TEXT,COLNum_YW),rep(BZ_TEXT,2)),stringsAsFactors=FALSE)
+  ft<-flextable(data)%>%
+    #ft<-set_header_df(ft,mapping=typology,key="col_keys")%>%
+    #  merge_h(part="header")%>%
+    #delete_part(part='header') %>% #border_remove()%>%
+    align(align = 'left',part='all') %>%
+    width(j=1:COLNum_YW,width = Each_Cell_Len)%>%
+    width(j=COLNum_BZ:dim(data)[2],width=Each_Cell_Len)%>%
+    flextable::compose(i=1,j=1, value=as_paragraph(as_image(src=list.files(getwd(), 'YellowGanTan.png', full.names = T), width=.20, height=.20),"","需考虑药物基因组学影响"),part='header') %>%
+    flextable::compose(i=1,j=COLNum_BZ, value=as_paragraph(as_image(src=list.files(getwd(), 'GreenCycle.png', full.names = T), width=.20, height=.20),"","标准处方推荐"), part='header') %>%
+    flextable::compose(i=ROWNum_FX,j=COLNum_BZ, value=as_paragraph(as_image(src=list.files(getwd(), 'RedGanTan.png', full.names =T), width=.20, height=.20),"","风险提示"), part='body')%>% 
+    style(pr_t=fp_text(font.size=11,font.family="SimSun"))%>%
+    style(i=1,j=1,pr_t=fp_text(color="#2F5496"),part="header")%>%
+    style(i=1,j=COLNum_BZ,pr_t=fp_text(color="#2F5496"),part="header")%>%
+    style(i=ROWNum_FX,j=COLNum_BZ,pr_t=fp_text(color="#2F5496"),part="body")%>%
+    merge_at(i=1,j=1:COLNum_YW,part='header')%>%
+    merge_at(i=1,j=COLNum_BZ:dim(data)[2],part='header')
+  for(RN in seq.int(from=ROWNum_FX,to=dim(data)[1])){
+    ft<-merge_at(ft,i=RN,j=(COLNum_BZ:dim(data)[2]),part='body')
+  }
+  #merge_h(part="body")
+  ft<-vline(ft,j=COLNum_YW,border = fp_border(),part='all')%>%
+    vline(j=(dim(data)[2]-1),border = fp_border(),part='header')
+  for(Ri in seq.int(from=ROWNum_FX,to=dim(data)[1])){
+    ft<-vline(ft,i=Ri,j=(dim(data)[2]-1),border = fp_border(),part='body')
+  }
+  ft<-border_outer(ft,border=fp_border(),part='all')%>%
+    padding(padding = 2, part = 'body')
+  return(ft)
+}
+Summary_Table_Print<-function(data){
+  ft<-flextable(data) %>%
+    #delete_part(part='header') %>% 
+    #border_remove()%>%
+    border_outer(border=fp_border())%>%
+    align(align = 'left',part='all') %>%
+    #align(j=1, align = 'left') %>%
+    width(j=1,width=1.8)%>%
+    width(j=2,width=5.3)%>%
+    merge_v(j=1,part='body')%>%
+    flextable::compose(i=1,j=1, value=as_paragraph(as_image(src=list.files(getwd(), 'YellowGanTan.png', full.names = T), width=.20, height=.20),"",V1),part='body') %>%
+    flextable::compose(i=2,j=1, value=as_paragraph(as_image(src=list.files(getwd(), 'GreenCycle.png', full.names = T), width=.20, height=.20),"",V1), part='body') %>%
+    flextable::compose(i=3,j=1, value=as_paragraph(as_image(src=list.files(getwd(), 'RedGanTan.png', full.names =T), width=.20, height=.20),"",V1), part='body')%>% 
+    style(j=1,pr_t=fp_text(color="#2F5496",font.size=11,font.family="Times New Roman"))%>%
+    #bg(j=1,bg='#A4C7F1', part='body')%>%
+    hline(i=1,border=fp_border())%>%
+    hline(i=2,border=fp_border())%>%
+    hline(i=4,border=fp_border())%>%
+    #FitFlextableToPage() %>%
+    delete_part(part='header')%>% 
+    padding(padding = 2, part = 'body')
+  return(ft)
+}
+Drug_Table_Print<-function(data){
+  MERGED_H_RINDEX<-which(data[,2]=="")
+  ft<-flextable(data)%>%
+    #align(align = 'left',part='all') %>%
+    flextable::compose(j="Comment",i=~str_detect(data$Comment,"Consider"), value=as_paragraph(as_image(src=list.files(getwd(), 'YellowGanTan.png', full.names =T), width=.20, height=.20),"",Comment), part='body')%>%
+    flextable::compose(j="Comment",i=~str_detect(data$Comment,"Assess"), value=as_paragraph(as_image(src=list.files(getwd(), 'YellowGanTan.png', full.names =T), width=.20, height=.20),"",Comment), part='body')%>%
+    flextable::compose(j="Comment",i=~str_detect(data$Comment,"Initial"), value=as_paragraph(as_image(src=list.files(getwd(), 'YellowGanTan.png', full.names =T), width=.20, height=.20),"",Comment), part='body')%>%
+    #compose(j="Comment",i=~str_detect(data$Comment,"Initial"), value=as_paragraph(as_image(src=list.files(getwd(), 'YellowGanTan.png', full.names =T), width=.20, height=.20),"",Comment), part='body')%>%
+    flextable::compose(j="Comment",i=~str_detect(data$Comment,"Increased risk"), value=as_paragraph(as_image(src=list.files(getwd(), 'RedGanTan.png', full.names =T), width=.20, height=.20),"",Comment), part='body')%>%
+    flextable::compose(j="Comment",i=~str_detect(data$Comment,"Standard"), value=as_paragraph(as_image(src=list.files(getwd(), 'GreenCycle.png', full.names =T), width=.20, height=.20),"",Comment), part='body')%>%
+    width(j=1,width = 1.8)%>%
+    width(j=2,width = 5.3)
+  for(i in seq.int(from=1,to=length(MERGED_H_RINDEX))){
+    ft<-merge_at(ft,i=MERGED_H_RINDEX[i],part='body')
+  }
+  ft<-merge_v(ft,j=1,part='body')%>%
+    theme_box()%>%
+    #align(j=1, align = 'left')%>%
+    align(align = 'left',part='all')%>%
+    style(pr_t=fp_text(font.size=11,font.family="Times New Roman"))%>%
+    bg(bg='#A4C7F1', part='header')%>%
+    padding(padding = 2, part = 'body')
+    #delete_part(part = 'header')
+  return(ft)
+}
+Gene_Table_Print<-function(data){
+  ft<-flextable(data)%>%
+    width(j=1,width = 2.3)%>%
+    width(j=2,width = 4.8)%>%
+    align(align = 'left',part='all')%>%
+    bg(bg='#A4C7F1', part='header')%>%
+    border_remove()%>%
+    border_outer(border=fp_border())
+  #theme_box()
+   for(q in seq.int(from = 1,to=c(dim(data)[1]/3),by=1)) {
+     RowNum<-q*3
+      ft<-hline(ft,i=RowNum,border = fp_border())
+      }
+   ft<-vline(ft,j=2,border=fp_border(),part='header')%>%
+     style(pr_t=fp_text(font.size=11,font.family="Times New Roman"))
+   #ft<-delete_part(ft,part = 'header')
+  return(ft)
+ }
+#####################################################################
+
+#########################Print out to micrcosoft word file#############
+#Table_One_ft<-Summary_Table_Print(Total_Table_One)
+Table_Summary0<-Table_Generate(YaoWu_Data,BiaoZhun_Data,FengXian_Data)
+Table_One_ft<-Summary_Table_Print0(Table_Summary0)
+#Table_Two_ft<-Drug_Table_Print(Table2)
+Table_Two_ft<-Drug_Table_Print(Drug_Table)
+Table_Three_ft<-Gene_Table_Print(Gene_Phenotype_Table)
+template_doc<-"English_Template.docx"
+doc <- read_docx(template_doc) %>%
+  body_add_flextable(Table_One_ft)%>%
+  body_add_par("Pharmacogenomic Interaction Details",style = 'summary_table_title')%>%
+  body_add_flextable(Table_Two_ft)%>%
+  body_add_par("Genotype Findings",style="summary_table_title")%>%
+  body_add_flextable(Table_Three_ft)
+  
+doc<-body_add_docx(doc,"disclaimer_English.docx")  
+
+print(doc,target="Test_EN_V1.docx") 
+
+#template_doc<-read_docx("English_Template.docx")
+#template_doc<-headers_replace_all_text(template_doc,'',sample_barcode)
+#template_doc<-headers_replace_all_text(template_doc,'xing_ming',name)
+#template_doc<-headers_replace_all_text(template_doc,'xing_bie',gender)
+#template_doc<-headers_replace_all_text(template_doc,'nian_ling',age)
+#template_doc<-headers_replace_all_text(template_doc,'sample_id',sample_id)
+
+#########################Finished to generate the word file#############
+
+
+
+
