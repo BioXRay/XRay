@@ -1,0 +1,2718 @@
+####Preprocess UMI sequencing data, arccoding to the njnad manual
+#writed by BioXRay
+#!/usr/bin/bash
+
+R1=$1
+R2=$2
+
+SAMPLE_NAME=`echo $R1 | awk -F "_" '{print $1}'`
+
+PICARD_TOOL="/xx/genome_tools/picard.jar"
+FGBIO_TOOL="/xx/genome_tools/fgbio-1.3.0.jar"
+PLATFORM="MGI" #"ILLUMINA"
+
+GENOME="/xx/human_genome/b37_less_CEUtrio_data/human_g1k_v37.fasta"
+HG_Dict="/xx/human_genome/b37_less_CEUtrio_data/human_g1k_v37.dict"
+echo "#######################################################"
+echo -e "\t1. Step --- Truning the fastq to uBAM ......"
+echo "#######################################################"
+
+java -jar $PICARD_TOOL FastqToSam F1=$R1 F2=$R2 PL=${PLATFORM} SM=${SAMPLE_NAME} LB=${SAMPLE_NAME} RG=${SAMPLE_NAME} OUTPUT=${SAMPLE_NAME}.ubam
+
+echo "#######################################################"
+echo -e "\t2. Step --- Extracting UMI information from the uBAM ......."
+echo "#######################################################"
+
+echo -e "\t Making sure the read structure information from the kit-lab."
+if [ $PLATFORM == "ILLUMINA" ];then
+	READ_Structure="3M2S+T 3M2S+T"
+else
+	READ_Structure="3M7S+T 3M7S+T"
+fi
+echo $READ_Structure
+#--molecular-index-tags=ZA ZB (optional)
+java -jar $FGBIO_TOOL ExtractUmisFromBam --input=${SAMPLE_NAME}.ubam --output=${SAMPLE_NAME}.umi.ubam --read-structure=$READ_Structure --single-tag=RX --molecular-index-tags="ZA ZB"
+
+
+echo "#######################################################"
+echo -e "3. Step --- Alignment uBAM to the reference genome ......"
+echo "#######################################################"
+
+java -jar $PICARD_TOOL SamToFastq I=${SAMPLE_NAME}.umi.ubam F=/dev/stdout INTERLEAVE=true | bwa mem -p -t 16 ${GENOME} /dev/stdin | samtools view -b > ${SAMPLE_NAME}.umi.bam
+
+echo "#######################################################"
+echo -e "4. Step --- Merging the uBAM and BAM ......"
+echo "#######################################################"
+
+java -jar ${PICARD_TOOL} MergeBamAlignment R=${GENOME} UNMAPPED=${SAMPLE_NAME}.umi.ubam ALIGNED=${SAMPLE_NAME}.umi.bam O=${SAMPLE_NAME}.umi.merged.bam SO=coordinate ALIGNER_PROPER_PAIR_FLAGS=true MAX_GAPS=-1 VALIDATION_STRINGENCY=SILENT CREATE_INDEX=true ORIENTATIONS=FR
+
+echo "#######################################################"
+echo -e "5. Step --- Call Consensus Reads Group Reads By UMI ......"
+echo "#######################################################"
+
+java -jar $FGBIO_TOOL GroupReadsByUmi --input=${SAMPLE_NAME}.umi.merged.bam --output=${SAMPLE_NAME}.umi.group.bam --strategy=paired --min-map-q=20 --edits=1
+
+echo "#######################################################"
+echo -e "6. Step --- Calls duplex consensus reads ......"
+echo "#######################################################"
+
+java -jar $FGBIO_TOOL CallDuplexConsensusReads --min-reads=1 --min-input-base-quality=30 --error-rate-pre-umi=45 --error-rate-post-umi=30 --input=${SAMPLE_NAME}.umi.group.bam --output=${SAMPLE_NAME}.consensus.ubam
+
+echo "#######################################################"
+echo -e "7. Step --- Mapping consensus reads and combined ......"
+echo "#######################################################"
+
+java -jar $PICARD_TOOL SamToFastq I=${SAMPLE_NAME}.consensus.ubam F=/dev/stdout INTERLEAVE=true | bwa mem -p -t 20 ${GENOME} /dev/stdin | java -jar $PICARD_TOOL MergeBamAlignment R=${GENOME} UNMAPPED=${SAMPLE_NAME}.consensus.ubam ALIGNED=/dev/stdin O=${SAMPLE_NAME}.consensus.bam SO=coordinate ALIGNER_PROPER_PAIR_FLAGS=true MAX_GAPS=-1 VALIDATION_STRINGENCY=SILENT CREATE_INDEX=true ORIENTATIONS=FR
+
+echo "#######################################################"
+echo -e "8. Step --- Filter Consensus reads ......"
+echo "#######################################################"
+
+java -jar $FGBIO_TOOL FilterConsensusReads --input=${SAMPLE_NAME}.consensus.bam --output=${SAMPLE_NAME}.consensus.filtered.bam --ref=${GENOME} --min-reads=2 --max-read-error-rate=0.05 --max-base-error-rate=0.1 --min-base-quality=30 --max-no-call-fraction=0.05
+
+echo "#######################################################"
+echo -e "9. Step --- Clip Consensus reads ......"
+echo "#######################################################"
+
+java -jar $FGBIO_TOOL ClipBam --input=${SAMPLE_NAME}.consensus.filtered.bam --output=${SAMPLE_NAME}.consensus.filtered.cliped.bam --ref=${GENOME} --clipping-mode=Hard --clip-overlapping-reads=true
+
+echo "#######################################################"
+echo -e "10. Step --- Vardict calling the variants......"
+echo "#######################################################"
+
+AF_THR="0.01"
+BED="/xx/BED/TMB-hg19.bed"
+VarDict="/xx/genome_tools/VarDictJava/build/distributions/VarDict-1.8.0/bin"
+THREADS=8
+${VarDict}/VarDict -G ${GENOME} -f $AF_THR -N $SAMPLE_NAME -b ${SAMPLE_NAME}.consensus.filtered.cliped.bam -z -c 1 -S 2 -E 3 -g 4 -r 1 -B 1 -th $THREADS $BED | ${VarDict}/teststrandbias.R | ${VarDict}/var2vcf_valid.pl -N $SAMPLE_NAME -E -f $AF_THR > ${SAMPLE_NAME}.vardcit.vcf
+
+java -jar $PICARD_TOOL SortVcf I=${SAMPLE_NAME}.vardict.vcf O=${SAMPLE_NAME}.sorted.vcf SD=$HG_Dict
+
+##########################################################################################################
+
+### MGI Platform Sequencing, preprocess script###
+#writed by BioXRay
+##parameter samplefile content:
+#SampleName	index_id	index sequence
+#sample1	41	TTAGATGCAT
+#sample2	42	GTCCAGAGCT
+#sample3	43	CACGTGATAG
+
+#!/usr/bin/python
+
+import os
+import sys
+import re
+import string
+import subprocess
+import argparse
+
+from fuzzywuzzy import fuzz
+
+parser=argparse.ArgumentParser(description="MGI fq file copying script(Preprocessing) in Python2 environment")
+parser.add_argument('--mgipath',type=str,default=None,help="MGI Sequencer fq file directory")
+#parser.add_argument('--project',type=str,default=None,help="MGI Sequencer project name")
+parser.add_argument('--samplefile',type=str,default=None,help="Sample information about the sequencing(3 Columns)")
+parser.add_argument('--out',type=str,default=None,help="Saving fastq directory name")
+args=parser.parse_args()
+MGI_PATH="/xx/mgiseq/Result/OutputFq/"+args.mgipath	#sys.argv[1] First, it's must mount the sequencer of MGI.
+SAMPLE_FILE="/xx/fastq_raw_data/"+args.out+"/"+args.samplefile	#sys.argv[2]
+OUT="/xx/fastq_raw_data/"+args.out	#sys.argv[3]
+#print(MGI_PATH)
+#print(SAMPLE_FILE)
+#print(OUT)
+def DNA_Reverse_Complement(Seq):
+	return(Seq.translate(string.maketrans('ATCG','TAGC'))[::-1]) # Python2 environment
+	#return(Seq.translate(Seq.maketrans('ATCG','TAGC'))[::-1]) # Python3 code
+
+Sample_dict={}
+Sample_SIdict={}
+Sample_Num=0
+with open(SAMPLE_FILE,'r') as SF:
+	for line in SF.readlines():
+		if(re.match(r"^Sample",line)):
+			#print(line.strip())
+			continue
+		else:
+			Record=line.strip().split("\t")
+			SIndex=Record[2]+"#"+Record[1]
+			Index=Record[1]
+			Sample_dict[Index]=Record[0]
+			Sample_SIdict[SIndex]=Record[0]
+			Sample_Num+=1
+			#print("%s\t%s\t%s" %(Record[0],Record[1],Record[2]))
+			#print("Reverse Seq: %s; Index: %s; Key: %s" % (DNA_Reverse_Complement(Record[2]),Index,Sample_dict[Index]))
+
+
+print("Total Sample is %s" % Sample_Num)
+MGI_FILE=MGI_PATH+"/SequenceStat.txt"
+
+#Mismatch information
+#Real_SNum=0
+INFO_dict={}
+#BARCODE_Percent_dict={}
+with open(MGI_FILE,'r') as BARCODE:
+	for line in BARCODE.readlines():
+		if(re.match(r"^#",line)):
+			continue
+		else:
+			Records=line.strip().split("\t")
+			Records[1]=Records[1].strip()
+			#Records[0]=[Records[0]]
+			#Real_SNum+=1
+			#if(Real_SNum<=5):
+			#	print(Records[3])
+			Bar_Value=Records[0].strip()+"#"+Records[3].strip()
+			if Records[1] in INFO_dict.keys():
+				#INFO_dict[Records[1]].append(Records[0])
+				INFO_dict[Records[1]].append(Bar_Value)
+			else:
+				INFO_dict[Records[1]]=[]
+				#INFO_dict[Records[1]].append(Records[0])
+				INFO_dict[Records[1]].append(Bar_Value)
+
+			#if Percent_id not in BARCODE_Percent_dict.keys():
+			#	BARCODE_Percent_dict[Percent_id]=Records[3]
+Match_Sample_Num=0
+Line_Num=0
+Count_Sample=set()
+Out_Num={}
+with open(MGI_FILE,'r') as MF:
+	for line in MF.readlines():
+		if(re.match(r"^#",line)):
+			print("MGI_Index\tMGI_barcode\tRead Count\tPercent(%)\tMGI Fq\tSample_Name\tSampleSheet_id\tSampleSheet_Seq\tSampleSheet_ReverseSeq\tFastq\tMisMatch_0\tMisMatch_1\tMisMatch_2\tMisMatch_gt3\tChecking Note")
+			continue
+		else:
+			Line_Num+=1
+			End_Num=Sample_Num*2
+			if(len(Count_Sample)==Sample_Num):
+				break
+			else:
+				TMP=line.strip().split("\t")
+				#print("%s\t%s" %(TMP[0],TMP[1]))
+				Barcode=re.sub("barcode","",TMP[1].strip())
+
+				mis_match_num=0
+				mis_match_0_percent=0
+				mis_match_1_percent=0
+				mis_match_2_percent=0
+				mis_match_gt3_percent=0
+				Search_barcode=TMP[1].strip()
+				if Search_barcode in INFO_dict.keys():
+#					print("Key: %s" % Search_barcode)#print("Number: %d" % len(INFO_dict[Search_barcode]))
+					#print(INFO_dict[Search_barcode])
+					str_seq1=list(TMP[0].strip())
+					for j in Sample_SIdict.keys():
+						Tmp_Str=j.split("#")
+						Search_Seq=DNA_Reverse_Complement(Tmp_Str[0])
+						if(Barcode==Tmp_Str[1]):
+							IndexSeq=Tmp_Str[0]
+							IndexSeq_id=Tmp_Str[1]
+							ReIndexSeq=DNA_Reverse_Complement(Tmp_Str[0])
+							#Line_Num+=1
+							if(Search_Seq==TMP[0]):
+								Note=""
+								#Line_Num+=1
+								Match_Sample_Num+=1
+							else:
+								Note="*"
+							NUM=0
+							for var in INFO_dict[Search_barcode]:
+								Seq_Info=var.split("#")
+								NUM+=1
+								Match_Percent=fuzz.ratio(Seq_Info[0],Search_Seq)
+								mis_match_num=len(Seq_Info[0])-(Match_Percent/10.0)
+#								if(NUM<=5):
+						#		print("Index\t%s\tPercent\t%s\tIndex_lab\t%s\tmismatch\t%f" %(Seq_Info[0],Seq_Info[1],Search_Seq,mis_match_num))
+								if(round(mis_match_num)==0.0):
+									mis_match_0_percent+=float(Seq_Info[1])
+								elif(round(mis_match_num)==1.0):
+									mis_match_1_percent+=float(Seq_Info[1])
+								elif(round(mis_match_num)==2.0):
+									mis_match_2_percent+=float(Seq_Info[1])
+								else:
+									mis_match_gt3_percent+=float(Seq_Info[1])
+
+				Count_Sample.add(Barcode)
+				MGI_Key=TMP[0]+"#"+Barcode
+				#print("LineNo: %s\tEndNo:%s\n"%(Line_Num,End_Num))
+				#print("%s\t%s\t%s" % (TMP[0].strip(),Barcode,Sample_dict[Barcode]))
+				P=subprocess.Popen("ls "+MGI_PATH+" | grep _"+Barcode+"_"+" | grep fq | grep gz",shell=True,stdout=subprocess.PIPE)
+				for fq in P.stdout.readlines():
+					#print(fq.strip())
+					#fq=str(fq,encoding='utf-8') # Python3 code
+					FNAME=fq.strip().split("_")
+					#FNAME=fq.strip().split("_")
+					if(MGI_Key in Sample_SIdict.keys()):
+						TMP_FNAME=re.sub(FNAME[0],Sample_SIdict[MGI_Key],fq.strip())
+					else:
+						TMP_FNAME=re.sub(FNAME[0],Sample_dict[Barcode],fq.strip())
+					#print("%s\t%s" %(fq.strip(),TMP_FNAME))
+					NEW_FNAME=re.sub(r"fq.gz","fastq.gz",TMP_FNAME)
+					if(Barcode not in Out_Num.keys()):
+						Out_Num[Barcode]=1
+					else:
+						Out_Num[Barcode]+=1
+					if(Out_Num[Barcode]<=2):
+						print("%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s" %(TMP[0].strip(),TMP[1].strip(),TMP[2].strip(),TMP[3].strip(),fq.strip(),Sample_dict[Barcode],IndexSeq_id,IndexSeq,ReIndexSeq,NEW_FNAME,mis_match_0_percent,mis_match_1_percent,mis_match_2_percent,mis_match_gt3_percent,Note))
+						os.system("cp "+MGI_PATH+"/"+fq.strip()+" "+OUT+"/"+NEW_FNAME)
+#############################################################################
+#!/usr/bin/bash
+
+if [ $# -le 1 ];then
+	echo -e "Usage:
+	\tSavePath\t---The path of the fastq saved.\n
+       	\tSampleSheet\t---The sample information is for the squencing\n"
+	exit 1
+elif [ $# -eq 2 ];then
+	SavePath=$1 #/xx/fastq_raw_data/200910_MGI
+	SampleSheet=$2 #F300002272_SampleName_MGI_Relationship_200910.txt
+	CHIP_INFO=`echo ${SampleSheet} | awk -F "_" '{print $1}'`
+	MGI_DOWNLOAD_PATH="/xx/mgiseq/Result/OutputFq/"${CHIP_INFO}
+	echo "Sequencing chip code: " ${CHIP_INFO}
+	echo "SampleSheet txt: " ${SampleSheet}
+	echo "SavePath: " ${SavePath}
+	OUT_DIR=`basename ${SavePath}`
+	echo "OUT directory: " ${OUT_DIR}
+	DIR_LIST=(`ls ${MGI_DOWNLOAD_PATH}`)
+	echo "Directory number: " ${#DIR_LIST[*]}
+	echo "Directory: " ${DIR_LIST[@]}
+	for Dir in ${DIR_LIST[@]}
+	do
+		#echo "Dealing the ${MGI_DOWNLOAD_PATH}/${Dir} ......"
+		mgipath="${CHIP_INFO}/${Dir}"
+		echo "mgipath: ${mgipath}"
+		echo "Python preprocess the ${mgipath} fq file"
+		out_log_file="${SavePath}/MGI_${Dir}_Download_Fastq_Info.txt"
+		echo "out log file : " ${out_log_file}
+		python /cxx/WXDX_MGI_Pipeline_Preprocess_V2.py --mgipath ${mgipath} --samplefile ${SampleSheet} --out ${OUT_DIR} > ${out_log_file}
+		cmd_str="python /xx/WXDX_MGI_Pipeline_Preprocess_V2.py --mgipath ${mgipath} --samplefile ${SampleSheet} --out ${OUT_DIR} > ${out_log_file}"
+		echo "Command: ${cmd_str}"
+		#python /cold_data/clc_result/WXDX_MGI_Pipeline_Preprocess_V2.py --mgipath F300001699/L02 --samplefile A000xxx_SampleName_MGI_Relationship_200701_ChipB.txt --out 200701_MGI_ChipB > /xx/200701_MGI_ChipB/MGI_L02_Download_Fastq_Info.txt	
+	done
+	echo "Merged fastq from difference line ...."
+	python MGI_FASTQ_Merged_Line.py ${SavePath}
+	echo "Finished merging fastq."
+fi
+
+#############################################################################
+
+##Merged fastq from the different line##
+
+#!/usr/bin/env python
+
+import sys
+import os
+import re
+import subprocess
+
+FASTQ_PATH=sys.argv[1]
+
+FILE=os.listdir(FASTQ_PATH)
+
+FASTQ_FILE=[]
+LINE_SET=[]
+BARCODE=[]
+for file in FILE:
+    if not os.path.isdir(file):
+        if(bool(re.search(".fastq.gz$",file))):
+            TMP=file.strip().split("_")
+            #print("Project:%s; %s; %s" % (TMP[0],TMP[1],TMP[2]))
+            LINE_SET.append(TMP[1])
+            BARCODE.append(TMP[2])
+            FASTQ_FILE.append(file)
+
+#print(FASTQ_FILE)
+FASTQ_FILE=sorted(FASTQ_FILE)
+#print(FASTQ_FILE)
+#print(len(FASTQ_FILE))
+
+LINE_SET=list(set(LINE_SET))
+BARCODE=list(set(BARCODE))
+#print(LINE_SET)
+#print(BARCODE)
+if(len(LINE_SET)==4):
+    fq_id=0
+    zcat_pid=[]
+    while(fq_id<len(FASTQ_FILE)):
+        L01_R1_FQ=FASTQ_FILE[fq_id]
+        SAMPLE_NAME=FASTQ_FILE[fq_id].strip().split("_")
+        L01_R2_fq_id=fq_id+1
+        L01_R2_FQ=FASTQ_FILE[L01_R2_fq_id]
+        L02_R1_fq_id=fq_id+2
+        L02_R1_FQ=FASTQ_FILE[L02_R1_fq_id]
+        L02_R2_fq_id=fq_id+3
+        L02_R2_FQ=FASTQ_FILE[L02_R2_fq_id]
+        L03_R1_fq_id=fq_id+4
+        L03_R1_FQ=FASTQ_FILE[L03_R1_fq_id]
+        #L03_R2_fq_id=fq_id+5
+        L03_R2_FQ=FASTQ_FILE[fq_id+5]
+        #L04_R1_fq_id=fq_id+6
+        L04_R1_FQ=FASTQ_FILE[fq_id+6]
+        #L04_R2_fq_id=fq_id+7
+        L04_R2_FQ=FASTQ_FILE[fq_id+7]
+        #print("L01 R1: %s; R2: %s" % (L01_R1_FQ,L01_R2_FQ))
+        #print("L02 R1: %s; R2: %s" % (L02_R1_FQ,L02_R2_FQ))
+        #print("L03 R1: %s; R2: %s" %(L03_R1_FQ,L03_R2_FQ))
+        #print("L04 R1: %s; R2: %s" % (L04_R1_FQ,L04_R2_FQ))
+        #print("#######################"*3)
+        fq_id+=8
+        tmp_file_R1_name=SAMPLE_NAME[0]+"_L01_L02_L03_L04_"+SAMPLE_NAME[2]+"_1.fastq"
+        tmp_file_R2_name=SAMPLE_NAME[0]+"_L01_L02_L03_L04_"+SAMPLE_NAME[2]+"_2.fastq"
+        cmd_R1="zcat "+FASTQ_PATH+"/"+L01_R1_FQ+" "+FASTQ_PATH+"/"+L02_R1_FQ+" "+FASTQ_PATH+"/"+L03_R1_FQ+" "+FASTQ_PATH+"/"+L04_R1_FQ+" > "+FASTQ_PATH+"/"+tmp_file_R1_name
+        cmd_R2="zcat "+FASTQ_PATH+"/"+L01_R2_FQ+" "+FASTQ_PATH+"/"+L02_R2_FQ+" "+FASTQ_PATH+"/"+L03_R2_FQ+" "+FASTQ_PATH+"/"+L04_R2_FQ+" > "+FASTQ_PATH+"/"+tmp_file_R2_name
+        #print(cmd_R1)
+        #print(cmd_R2)
+        p_zcat_R1=subprocess.Popen(cmd_R1,shell=True)
+        #p_zcat_R1.wait()
+        zcat_pid.append(p_zcat_R1)
+        p_zcat_R2=subprocess.Popen(cmd_R2,shell=True)
+        zcat_pid.append(p_zcat_R2)
+        #p_zcat_R2.wait()
+        #print("#######################"*5)
+
+    for p in zcat_pid:
+        p.wait()
+    print("Dealing the 4 line")
+elif(len(LINE_SET)==2):
+    fq_id=0
+    zcat_pid=[]
+    while(fq_id<len(FASTQ_FILE)):
+        L01_R1_FQ=FASTQ_FILE[fq_id]
+        SAMPLE_NAME=FASTQ_FILE[fq_id].strip().split("_")
+        L01_R2_FQ=FASTQ_FILE[fq_id+1]
+        L02_R1_FQ=FASTQ_FILE[fq_id+2]
+        L02_R2_FQ=FASTQ_FILE[fq_id+3]
+        fq_id+=4
+        tmp_file_R1_name=SAMPLE_NAME[0]+"_L01_L02_"+SAMPLE_NAME[2]+"_1.fastq"
+        tmp_file_R2_name=SAMPLE_NAME[0]+"_L01_L02_"+SAMPLE_NAME[2]+"_2.fastq"
+        cmd_R1="zcat "+FASTQ_PATH+"/"+L01_R1_FQ+" "+FASTQ_PATH+"/"+L02_R1_FQ+" > "+FASTQ_PATH+"/"+tmp_file_R1_name
+        cmd_R2="zcat "+FASTQ_PATH+"/"+L01_R2_FQ+" "+FASTQ_PATH+"/"+L02_R2_FQ+" > "+FASTQ_PATH+"/"+tmp_file_R2_name
+        #print(cmd_R1)
+        #print(cmd_R2)
+        p_zcat_R1=subprocess.Popen(cmd_R1,shell=True)
+        #p_zcat_R1.wait()
+        zcat_pid.append(p_zcat_R1)
+        p_zcat_R2=subprocess.Popen(cmd_R2,shell=True)
+        #p_zcat_R2.wait()
+        zcat_pid.append(p_zcat_R2)
+
+    for p in zcat_pid:
+        p.wait()
+    print("Dealing the 2 line")
+else:
+    print("Please checking the sequencing library!!")
+
+####
+print("***********************************"*6)
+print("gzip the fastq file ......")
+tmp_fastq=os.listdir(FASTQ_PATH)
+gzip_pid=[]
+for fq in tmp_fastq:
+    if not os.path.isdir(fq):
+        if(bool(re.search(".fastq$",fq))):
+            cmd_gzip="gzip "+FASTQ_PATH+"/"+fq
+            #print(cmd_gzip)
+            p_gzip=subprocess.Popen(cmd_gzip,shell=True)
+            #p_gzip.wait()
+            gzip_pid.append(p_gzip)
+
+for p in gzip_pid:
+    p.wait()
+
+print("Merged MGI fastq has finished!!!")
+##############################################################
+
+##Set time run script##
+#!/usr/bin/python
+
+import datetime
+import os
+
+def SetTimer(schedule_time):
+    run_flag=0
+    while(run_flag<1):
+        now_time=str(datetime.datetime.now())[:-7]
+        #print("Now time: %s" % now_time)
+        if(now_time==str(schedule_time)):
+            os.system("echo "+"Beginning running ......")
+            os.system("nohup bash xxx.sh parameter > out.log 2>&1 &")
+            run_flag+=1
+
+if __name__=="__main__":
+    schedule_time=datetime.datetime(2020,8,14,22,00,00)
+    #schedule_time=datetime.datetime(2020,07,24,18,56,00)
+    print("Schedule Time: %s" % str(schedule_time))
+    SetTimer(schedule_time)
+###################################################################
+##
+
+#!/bin/bash
+
+set -ue
+
+VCF=$1
+EXCEL=$2
+
+python vep.py  --vep_bin /xx/anaconda3/envs/vep98/bin \
+  --vep_cache /xx/vep_data \
+  --vep_plugin /xx/vep_data/plugin/VEP_plugins \
+  --ref /xx/hg38/Homo_sapiens_sequence_hg38_o.fa \
+  --assembly GRCh38 \
+  --dbnsfp /xx/vep_data/dbNSFP4.0a/dbNSFP4.0a.gz  \
+  --clinvar /xx/annovar/humandb/hg38_clinvar_20190305.txt \
+  --cosmic /xx/annovar/humandb/hg38_cosmic70.txt \
+  --gene_transcript /xx/gene_transcript/gene_primary_transcript_table.tsv \
+  --threads 8 \
+  --python /usr/bin/python \
+  --intervar /xx/InterVar-master/Intervar.py \
+  --intervar_config /xx/config.ini  \
+  --perl /usr/bin/perl  \
+  --convert2annovar /xx/InterVar-master/convert2annovar.pl \
+  --vcf $VCF \
+  --out $EXCEL
+
+#config.ini: https://github.com/WGLab/InterVar
+#####################################################################
+###
+#!/usr/bin/env python
+
+import os
+import re
+import subprocess
+import uuid
+import gzip
+import pandas as pd
+import numpy as np
+import logging
+logger = logging.getLogger('vep')
+
+from pathlib import Path
+from argparse import ArgumentParser
+
+parser = ArgumentParser(description="use vep to annotate vcf")
+
+parser.add_argument('--vep_bin', dest='vep_bin', action='store', required=True, help='path to vep binary directory')
+parser.add_argument('--vep_cache', dest='vep_cache', action='store', required=True, help='path to vep cache directory')
+parser.add_argument('--vep_plugin', dest='vep_plugin', action='store', required=True, help='path to vep plugin directory')
+parser.add_argument('--ref', dest='ref', action='store', required=True, help='path to human reference(fasta)')
+parser.add_argument('--assembly', dest='assembly', action='store', default='GRCh37', choices=['GRCh38', 'GRCh37'], required=False, help='human reference assembly, GRCh37 or GRCh38')
+parser.add_argument('--dbnsfp', dest='dbnsfp', action='store', required=True, help='path to dbnsfp directory')
+parser.add_argument('--clinvar', dest='clinvar', action='store',required=True, help='path to clinvar vcf')
+parser.add_argument('--cosmic', dest='cosmic', action='store', required=True, help='path to cosmic vcf')
+parser.add_argument('--gene_transcript', dest='gene_transcript', action='store', required=True, help='path to gene primary transcript')
+
+parser.add_argument('--python', dest='python', action='store', required=True, help='path to python(for intervar)')
+parser.add_argument('--intervar', dest='intervar', action='store', required=True, help='path to intervar')
+parser.add_argument('--intervar_config', dest='intervar_config', action='store', required=True, help='path to intervar config')
+
+parser.add_argument('--perl', dest='perl', action='store', required=True, help='path to perl(for convert2annovar)')
+parser.add_argument('--convert2annovar', dest='convert2annovar', action='store', required=True, help='path to convert2annovar')
+
+parser.add_argument('--threads', dest='threads', action='store', type=int, default=8, help='vep threads')
+parser.add_argument('--vcf', dest='vcf', action='store', required=True, help='path to input vcf')
+parser.add_argument('--out', dest='out', action='store', required=True, help='path to output tsv file')
+
+args = parser.parse_args()
+print(args)
+
+def convert_vcf_to_tsv(vcf):
+
+    logger.info('convert vcf to tsv')
+    tmp_tsv = 'tmp' + str(uuid.uuid4()) + '.tsv'
+
+    ldfs = []
+    with open(vcf) as o_f :
+        samples = []
+        for line in o_f:
+            if line[:2] == '##':
+                continue
+            elif line[:6] == '#CHROM':
+                columns = line.rstrip('\n').split('\t')
+                if len(columns) == 8:
+                    samples = ['sample']
+                elif len(columns) == 9:
+                    samples = ['sample'] 
+                elif len(columns) >= 10:
+                    samples = columns[9:]
+            else:
+                words = line.rstrip('\n').split('\t')
+                info = '.'
+                fformat ='.'
+                fformat_v = '.'
+                if len(words) == 8:
+                    info = words[7]
+                    fformat = '.'
+                elif len(words) >= 10:
+                    info = words[7]
+                    fformat = words[8]
+                    fformat_v = words[9:]
+
+                if info == '.':
+                    info_columns = ['info']
+                    info_values = ['.']
+                else:
+                    info_columns = []
+                    info_values = []
+                    for i in info.split(';'):
+                        ii = i.split("=")
+                        info_columns.append('INFO_'+ii[0])
+                        info_values.append('='.join(ii[1:]))
+                
+                if fformat == '.':
+                    format_columns = ['format']
+                    format_values = ['.']
+                else:
+                    format_columns = []
+                    format_values = []
+                    if len(samples) == 1:
+                        format_columns += ['FORMAT_' + i for i in fformat.split(':')]
+                        format_values += fformat_v[0].split(':')
+                    else:
+                        for fi, fv in enumerate(fformat_v):
+                            format_columns += [ 'sample_' + str(fi+1) + '_FORMAT_' + i for i in fformat.split(':')]
+                            format_values += fv.split(':')
+
+
+                ldf = pd.DataFrame([words[:7] + info_values + format_values], columns=columns[:7] + info_columns + format_columns)
+                ldfs.append(ldf)
+    df = pd.concat(ldfs, sort=False)
+
+    df.to_csv(tmp_tsv, sep='\t', index=False, encoding='utf-8')
+
+    logger.info('convert vcf to tsv successfully')
+    return tmp_tsv
+
+
+def add_vid(vcf):
+
+    print(vcf)
+    logger.info('add vid to vcf {vcf} ')
+    tmp_vcf = str('tmp' + str(uuid.uuid4()) + '.vcf')
+    print(tmp_vcf)
+    try:
+        with open(tmp_vcf, 'w') as w_f, open(vcf) as o_f:
+            i = 100000
+            for line in o_f:
+                if line[0] == '#':
+                    print(line, file=w_f, end='')
+                else:
+                    words = line.split('\t')
+                    if words[2] == '.':
+                        new_line = '\t'.join(words[:2] + [str(i)] + words[3:])
+                    else:
+                        new_line = line
+                    print(new_line, file=w_f, end='')
+                    i += 1
+    except Exception as e:
+        print(e)
+        with open(tmp_vcf, 'w') as w_f, gzip.open(vcf, 'rt') as o_f:
+            i = 0
+            for line in o_f:
+                if line[0] == '#':
+                    print(line, file=w_f, end='')
+                else:
+                    words = line.split('\t')
+                    new_line = '\t'.join(words[:2] + [str(i)] + words[3:])
+                    print(new_line, file=w_f, end='')
+                    i += 1
+
+    logger.info('add vid to vcf succesfully')
+    return tmp_vcf
+
+
+def run_vep(vcf):
+
+    logger.info('run vep')
+    tmp_vep_tsv = str('tmp' + str(uuid.uuid4()) + '.vep.tsv')
+
+    dbnspf_columns = ','.join([
+        'Ensembl_geneid',
+        'Ensembl_transcriptid',
+        'Ensembl_proteinid',
+        'FATHMM_pred',
+        'Interpro_domain',
+        'SIFT4G_pred',
+        'PROVEAN_pred',
+        'Polyphen2_HVAR_pred',
+        'LRT_pred',
+        'MutationAssessor_pred',
+        'MutationTaster_pred',
+        'fathmm-MKL_coding_pred',
+        'MetaLR_pred',
+        'MetaSVM_pred',
+        'Polyphen2_HVAR_pred',
+        'M-CAP_pred',
+        'REVEL_score',
+        '1000Gp3_EAS_AF',
+        '1000Gp3_AF',
+        'ESP6500_AA_AF',
+        'ExAC_AF',
+        'ExAC_EAS_AF',
+        'gnomAD_exomes_controls_AF',
+        'gnomAD_exomes_controls_AFR_AF',
+        'gnomAD_exomes_controls_AMR_AF',
+        'gnomAD_exomes_controls_ASJ_AF',
+        'gnomAD_exomes_controls_EAS_AF',
+        'gnomAD_exomes_controls_FIN_AF',
+        'gnomAD_exomes_controls_NFE_AF',
+    ])
+
+    subprocess.run(f"""
+    export PATH={args.vep_bin}:$PATH; \
+    {args.vep_bin}/vep \
+        --cache \
+        --dir_cache {args.vep_cache} \
+        --cache_version 98 \
+        --fasta {args.ref} \
+        --assembly {args.assembly} \
+        --merged \
+        --offline \
+        --everything \
+        --custom {args.clinvar},Clinvar,vcf,exact,0,CLNSIG,CLNREVSTAT,CLNDN \
+        --custom {args.cosmic},COSMIC,vcf,exact,0,CNT,LEGACY_ID \
+        --dir_plugins {args.vep_plugin} \
+        --plugin dbNSFP,{args.dbnsfp},{dbnspf_columns} \
+        --format vcf \
+        -i {vcf} \
+        --tab \
+        -o {tmp_vep_tsv} \
+        --force_overwrite \
+        --fork {args.threads} \
+        --no_stats \
+        --no_escape
+    """, shell=True)
+
+    logger.info('run vep successfully')
+    return tmp_vep_tsv
+
+
+def run_intervar(vcf):
+    logger.info('run interval')
+
+    vcf_name = Path(vcf).stem
+    out_dir = str(Path(args.out).parent)
+    out_file = out_dir + '/' + vcf_name
+    with open(args.intervar_config) as o_f, open('config.ini', 'w') as w_f:
+        for line in o_f:
+            if line.startswith('inputfile ='):
+                print(f'inputfile = {vcf}', file=w_f)
+            elif line.startswith('outfile = '):
+                print(f"outfile = {out_file}", file=w_f)
+            else:
+                print(line, file=w_f, end='')
+
+    subprocess.run(
+        f"""
+        {args.python} {args.intervar} -c config.ini
+        """, shell=True
+    )
+
+    tmp_avinput = 'tmp' + str(uuid.uuid4()) + '.avinput'
+    subprocess.run(
+        f"""
+        {args.perl} {args.convert2annovar} --format vcf4 --includeinfo {vcf} > {tmp_avinput}
+        """, shell=True
+    )
+
+    adf = pd.read_csv(tmp_avinput, sep='\t', header=None, dtype=str)
+    adf = adf[[0,1,2,3,4,7]]
+    adf.columns = ['#Chr', 'Start', 'End', 'Ref', 'Alt', 'ID']
+
+    files = [str(f.resolve()) for f in Path(out_dir).glob('*.intervar')]
+    files = sorted(files, key=lambda f: os.stat(f).st_mtime)
+    vdf = pd.read_csv(files[0], sep='\t', dtype=str)
+    mdf = pd.merge(vdf, adf, on=['#Chr', 'Start', 'End', 'Ref', 'Alt'])
+    mdf.to_csv('interval.tsv', sep='\t', index=False)
+    
+    logger.info('run interval successfully')
+    return mdf[['ID', ' InterVar: InterVar and Evidence ']].rename(columns={' InterVar: InterVar and Evidence ':'intervar'})
+
+def main():
+
+    vcf1 = add_vid(args.vcf)
+    tsv1 = convert_vcf_to_tsv(vcf1)
+    tsv2 = run_vep(vcf1)
+
+    df1 = pd.read_csv(tsv1, sep='\t', dtype=str)
+
+    keep_columns = ['#CHROM', 'POS', 'ID', 'REF', 'ALT', 'QUAL', 'FILTER'] 
+    for c in df1.columns.tolist():
+        if  'INFO_' in c and 'DP' in c:
+            keep_columns.append(c)
+        if  'FORMAT_' in c and 'DP' in c:
+            keep_columns.append(c)
+        if  'FORMAT_' in c and 'AF' in c:
+            keep_columns.append(c)
+        if  'FORMAT_' in c and 'GT' in c:
+            keep_columns.append(c)
+        if  'FORMAT_' in c and 'CLCAD2' in c:
+            keep_columns.append(c)
+    df1 = df1[keep_columns]
+
+    df1['FORMAT_AD'] = df1['FORMAT_CLCAD2'].apply(lambda x: x.split(',')[1].strip() if isinstance(x, str) and ',' in x else '-')
+    df1['FORMAT_AD'] = df1['FORMAT_AD'].apply(lambda x: float(x) if x != '-' else 0)
+    df1['FORMAT_DP'] = df1['FORMAT_DP'].apply(lambda x: float(x))
+    df1['allele_frequency'] = df1['FORMAT_AD']/df1['FORMAT_DP']
+
+    comment_lines = 0
+    with open(tsv2) as o_f:
+        for line in o_f:
+            if line[:2] == '##':
+                comment_lines += 1
+            else:
+                break
+    df2 = pd.read_csv(tsv2, sep='\t', dtype=str, skiprows=comment_lines)
+    drop_columns = [
+        'FLAGS',
+        'TSL',
+        'APPRIS',
+        'CCDS',
+        'SWISSPROT',
+        'TREMBL',
+        'UNIPARC',
+        'REFSEQ_MATCH',
+        'SOURCE',
+        'GIVEN_REF',
+        'USED_REF',
+        'BAM_EDIT',
+        'SIFT',
+        'PolyPhen',
+        'miRNA',
+        'AF',
+        'PHENO',
+        'MOTIF_NAME',
+        'MOTIF_POS',
+        'HIGH_INF_POS',
+        'MOTIF_SCORE_CHANGE',
+        'DOMAINS',
+        'SYMBOL_SOURCE',
+        'MANE',
+        'GENE_PHENO',
+        'HGVS_OFFSET',
+        'DISTANCE',
+        'AFR_AF',
+        'AMR_AF',
+        'EUR_AF',
+        'SAS_AF',
+        'EA_AF',
+        'gnomAD_AFR_AF',
+        'gnomAD_AMR_AF',
+        'gnomAD_ASJ_AF',
+        'gnomAD_FIN_AF',
+        'gnomAD_NFE_AF',
+        'gnomAD_OTH_AF',
+        'gnomAD_SAS_AF',
+        'cDNA_position',
+        'CDS_position',
+        'Protein_position',
+        'Amino_acids',
+        'Feature_type',
+        'Codons',
+        'Gene',
+    ]
+
+    df2 = df2.drop(columns=drop_columns)
+    df2['HGVSp'] = df2['HGVSp'].apply(lambda x: x.split(':')[1] if ':' in x else x)
+    df2['EXON'] = df2['EXON'].apply(lambda x: x.replace('/', '\/'))
+    df2['INTRON'] = df2['INTRON'].apply(lambda x: x.replace('/', '\/'))
+
+    mdf = pd.merge(df1, df2, left_on='ID', right_on='#Uploaded_variation')
+    mdf = mdf.drop(columns=['#Uploaded_variation'])
+
+    gdf = pd.read_csv(args.gene_transcript, sep='\t')
+    primary_transcript = gdf[gdf['primary'] == 'Y']['nm'].tolist()
+
+    c = mdf['Feature'].str.contains('XM_')
+    mdf = mdf[~c].copy()
+
+    mdf['nm'] = [s.split('.')[0] if s[:2] == 'NM' else s for s in mdf['Feature']]
+    mdf['nm'] = mdf['nm'].astype(str)
+    mdf['score_1'] = np.where(mdf['nm'].isin(primary_transcript), 10, 0)
+    mdf['score_2'] = np.where(mdf['nm'].str.contains('NM_'), 10, 0)
+    mdf['score_3'] = np.where(mdf['CANONICAL'] != '-', 10, 0)
+    mdf = mdf.sort_values(by=['score_1', 'score_2', 'score_3'], ascending=False)
+
+    mdf = mdf.drop(columns=['nm','score_1', 'score_2', 'score_3'])
+    mdf.to_csv('mdf.tsv', index=False)
+
+    def concat_rows(df):
+        row = df.iloc[0,:].tolist()
+        if len(df) >= 2:
+            hgvsc = ';'.join(df.iloc[1:,:]['HGVSc'].tolist())
+            hgvsp = ';'.join(df.iloc[1:,:]['HGVSp'].tolist())
+            pi = df.columns.tolist().index('HGVSp')
+            new_values = row[:pi+1] + [hgvsc, hgvsp] + row[pi+1:]
+        else:
+            pi = df.columns.tolist().index('HGVSp')
+            new_values = row[:pi+1] + ['-', '-'] + row[pi+1:]
+        return new_values
+
+    m_columns = mdf.columns.tolist()
+    pi = m_columns.index('HGVSp')
+    new_columns = m_columns[:pi+1] + ['HGVSc_other', 'HGVSp_other'] + m_columns[pi+1:]
+
+    nr = mdf.groupby('ID').apply(concat_rows)
+    print(nr)
+    ndf = pd.DataFrame(nr.tolist(), columns=new_columns)
+
+    ndf = ndf.rename(columns={'Feature':'primary_transcript', 'Gene':'entrez', '#CHROM':'CHROM'})
+    ndf.to_csv('ndf1.xls', index=False, sep='\t')
+
+    for c in ndf.columns.tolist():
+        if '_AF' in c:
+            pass
+            #ndf[c] = ndf[c].apply(lambda x: float(x) if x != '-' and x.isnumeric() else 0)
+            #ndf = ndf[ndf[c] < 0.05]
+            #ndf[c] = ndf[c].apply(lambda x: x if x > 0 else '-')
+
+    n_columns = ndf.columns.tolist()
+    i1 = n_columns.index('Consequence')
+    i2 = n_columns.index('HGVSc')
+    i3 = n_columns.index('HGVSp')
+    i4 = n_columns.index('HGVSc_other')
+    i5 = n_columns.index('HGVSp_other')
+    nn_columns = n_columns[:i1+1] + ['HGVSc', 'HGVSp', 'HGVSc_other', 'HGVSp_other'] + n_columns[i1+1:i2] + n_columns[i2+1:i3] + n_columns[i3+1:i4] + n_columns[i4+1:i5] + n_columns[i5+1:]
+    ndf = ndf[nn_columns]
+
+    idf = run_intervar(vcf1)
+    idf.to_csv('intervar1.tsv', index=False, sep='\t')
+
+    ndf = pd.merge(ndf, idf, on='ID', how='left')
+
+
+    def translate_hgvsp(hgvsp):
+        ad = {'Cys': 'C', 'Asp': 'D', 'Ser': 'S', 'Gln': 'Q', 'Lys': 'K',
+        'Ile': 'I', 'Pro': 'P', 'Thr': 'T', 'Phe': 'F', 'Asn': 'N', 
+        'Gly': 'G', 'His': 'H', 'Leu': 'L', 'Arg': 'R', 'Trp': 'W', 
+        'Ala': 'A', 'Val':'V', 'Glu': 'E', 'Tyr': 'Y', 'Met': 'M', 'X':'*', 'Ter':'*'}
+
+        for k,v in ad.items():
+            hgvsp = re.sub(k, v, hgvsp)
+
+        if 'p.' in hgvsp:
+            return hgvsp[2:]
+        else:
+            return hgvsp   
+
+    ndf['hgvsp'] = ndf['HGVSp'].apply(translate_hgvsp)
+
+    nn_columns = ndf.columns.tolist()
+    print(ndf.columns.tolist())
+    columns = [
+    'CHROM', 'POS', 'REF', 'ALT', 'SYMBOL', 'Location', 'Allele', 'allele_frequency', 'FORMAT_DP', 'FORMAT_AD','primary_transcript', 'HGVSc', 'HGVSp', 'hgvsp', 'Consequence', 'VARIANT_CLASS', 'EXON', 'INTRON',
+    'Existing_variation', 'IMPACT', 'Clinvar_CLNSIG', 'COSMIC', 'COSMIC_CNT', 'COSMIC_LEGACY_ID', 'intervar', 'FORMAT_GT', 'HGVSc_other', 'HGVSp_other', 'PUBMED',
+    'EAS_AF', 'AA_AF', 'gnomAD_AF', 'gnomAD_EAS_AF', 'MAX_AF', 'MAX_AF_POPS', '1000Gp3_AF', '1000Gp3_EAS_AF', 'ESP6500_AA_AF', 'ExAC_AF', 'ExAC_EAS_AF',
+    'Interpro_domain',  'FATHMM_pred', 'LRT_pred', 'M-CAP_pred', 'MetaLR_pred', 'MetaSVM_pred', 'MutationAssessor_pred',
+    'MutationTaster_pred', 'PROVEAN_pred', 'Polyphen2_HVAR_pred', 'REVEL_score', 'SIFT4G_pred', 'fathmm-MKL_coding_pred',
+    'QUAL', 'STRAND',
+    'Clinvar','Clinvar_CLNREVSTAT', 'clinvar_CLNDN', 'Ensembl_geneid', 'Ensembl_proteinid', 'Ensembl_transcriptid',
+    ]
+
+    primary_columns = [c for c in columns if c in nn_columns]
+    rest_columns = [c for c in nn_columns if not c in columns]
+
+    print('pc', primary_columns)
+    print('rc', rest_columns)
+
+    ndf = ndf[primary_columns + rest_columns]
+    ndf['HGVSc'] = ndf['HGVSc'].apply(lambda x: x.split(':')[1] if isinstance(x, str) and ':' in x else x)
+
+
+    ndf.to_csv(args.out, sep='\t', index=False)
+    logger.info(f'write output {args.out}')
+
+    #Path(vcf1).unlink()
+    #Path(tsv1).unlink()
+    #Path(tsv2).unlink()
+
+
+
+if __name__ == "__main__":
+    main()
+###############################################################
+#!/bin/bash
+echo -e "Usage:\n
+	FASTQ_R1 ---Paired-End Sequencing R1 file.\n
+	FASTQ_R2 ---Paired-ENd Sequencing R2 file.\n
+	Sampled_Pro ---Sampling Proportion.\n
+	Outpath ---The path that the sampled results are placed.\n
+	Depth ---The fastq depth of coverage.\n"
+FASTQ_R1="$1"
+FASTQ_R2="$2"
+Sampled_Pro="$3"
+Outpath="$4"
+Depth="$5"
+Suffix=".fastq"
+MJoin="_sampled_"
+if [ $# == "5" ];then
+	Prefix_R1=`echo "$FASTQ_R1" | sed "s/\(.*\)\.fastq$/\1/g"`
+	Out_R1=${Prefix_R1}${MJoin}${Depth}${Suffix}
+	/xx/seqkit sample -p $Sampled_Pro -s 123 -o $Outpath/$Out_R1 $FASTQ_R1 #123,200
+	echo "R1 file name: $Out_R1"
+	Prefix_R2=`echo "$FASTQ_R2" | sed "s/\(.*\)\.fastq$/\1/g"`
+	Out_R2=${Prefix_R2}${MJoin}${Depth}${Suffix}
+	/xx/seqkit sample -p $Sampled_Pro -s 123 -o $Outpath/$Out_R2 $FASTQ_R2 #123,200
+	echo "R2 file name: $Out_R2"
+fi
+echo "The sampleing are finished from the Paired-End FASTQ files."
+###################################################################################
+##
+#!/bin/bash
+
+echo -e "Usage:
+	Inputpath ---The path is the pdf2txt transforming the files.\n
+	FILE_OUT ---The file is saving the extracting information from the duplicate removal report, mapping summary report and Locally report.\n
+	WORKSPACE ---The work space directory.\n"
+Inputpath="$1"
+#Program="$2"
+FILE_OUT="$2"
+Trim="Trim"
+DupR="removal"
+MapS="Mapping"
+LocR="Locally"
+#"Locally" or "Coverage"
+if [ ! $3 ];then
+	WORKDIR=$Inputpath
+else
+	WORKDIR=$3
+fi
+#WORKDIR="/home/cdx/Temp_CLC"
+#cp $Inputpath/* /home/cdx/Temp_CLC/
+cd $WORKDIR
+`rename 's/ /_/g' *`
+`rename 's/[(),]//g' *`
+FLAG=0
+SampleName=(`ls $Inputpath | awk -F "_" '{print $1}' | uniq`)
+echo "The total number of the samples: " ${#SampleName[*]}
+echo "Sample Name: " ${SampleName[@]}
+#FOLLOW_CELL_BATCH=(`ls $Inputpath | awk -F "_" '{print $1}' | uniq`)
+#`rename 's/ /_/g' *`
+#`rename 's/[(),]//g' *`
+for Sample in ${SampleName[@]}
+do
+	echo "$Sample"
+	#FILE_Trim=`ls $Inputpath | grep "${Sample}_" | grep "$Trim"` 
+	#FILE_duplicate=`ls $Inputpath | grep "${Sample}_" | grep "$DupR"`
+	#FILE_mapping=`ls $Inputpath | grep "${Sample}_" | grep "$MapS"`
+	#FILE_Locally=`ls $Inputpath | grep "${Sample}_" | grep "$LocR"`
+	#echo "${FILE_Trim}"#echo "${FILE_duplicate}"#echo "${FILE_mapping}"#echo "${FILE_Locally}"
+	#pdf2txt.py -o $File_dup ${Inputpath}/${FILE_duplicate}
+	#pdf2txt.py -o $File_Trim ../${FILE_Trim}
+	cmd=`ls $Inputpath | grep "${Sample}_" | grep "$Trim"`
+	if [ $? -eq 0 ];then
+		TMP_Trim=`ls $Inputpath | grep "${Sample}_" | grep "$Trim"`
+		mv "$TMP_Trim" $Sample"_Trim_Report.pdf"
+		FILE_Trim=`ls $Inputpath | grep "${Sample}_" | grep "$Trim"`
+		echo "${FILE_Trim}"
+		pdftohtml -i -s -xml -stdout $FILE_Trim
+	else
+		echo "The Trim report pdf does not exist!!!"
+	fi
+	#pdf2txt.py -o $File_dup ../${FILE_duplicate}
+	cmd=`ls $Inputpath | grep "${Sample}_" | grep "$DupR"`
+	if [ $? -eq 0 ];then
+		TMP_DupR=`ls $Inputpath | grep "${Sample}_" | grep "$DupR"`
+		mv "$TMP_DupR" $Sample"_duplicate_removal_report.pdf"
+		FILE_duplicate=`ls $Inputpath | grep "${Sample}_" | grep "$DupR"`
+		echo "${FILE_duplicate}"
+		pdftohtml -i -s -xml -stdout $FILE_duplicate
+	else
+		echo "The duplicate removal pdf does not exist!!!"
+	fi
+	#pdf2txt.py -o $File_map ../${FILE_mapping}
+	cmd=`ls $Inputpath | grep "${Sample}_" | grep "$MapS"`
+	if [ $? -eq 0 ];then
+		TMP_mapping=`ls $Inputpath | grep "${Sample}_" | grep "$MapS"`
+		mv "$TMP_mapping" $Sample"_Mapping_report.pdf"
+		FILE_mapping=`ls $Inputpath | grep "${Sample}_" | grep "$MapS"`
+		echo "${FILE_mapping}"
+		pdftohtml -i -s -xml -stdout $FILE_mapping
+	else
+		echo "The mapping report pdf does not exist!!!"
+	fi
+	#pdf2txt.py -o $File_Loc ../${FILE_Locally}
+	cmd=`ls $Inputpath | grep "${Sample}_" | grep "$LocR"`
+	if [ $? -eq 0 ];then
+		TMP_Locally=`ls $Inputpath | grep "${Sample}_" | grep "$LocR"`
+		mv "$TMP_Locally" $Sample"_Locally_report.pdf"
+		FILE_Locally=`ls $Inputpath | grep "${Sample}_" | grep "$LocR"`
+		echo "${FILE_Locally}"
+		pdftohtml -i -s -xml -stdout $FILE_Locally
+	else
+		echo "The locally report pdf does not exist!!!"
+	fi
+	if [ `ls $WORKDIR | grep "${Sample}_" | grep "$Trim" | grep "xml"` ];then
+		File_Trim=`ls $WORKDIR | grep "${Sample}_" | grep "$Trim" | grep "xml"`
+	else
+		File_Trim="$Sample""_Trim_report.xml"
+	fi
+	if [ `ls $WORKDIR | grep "${Sample}_" | grep "$DupR" | grep "xml"` ];then
+		File_dup=`ls $WORKDIR | grep "${Sample}_" | grep "$DupR" | grep "xml"`
+	else
+		File_dup="$Sample""_duplicate_removal_report.xml"
+	fi
+	if [ `ls $WORKDIR | grep "${Sample}_" | grep "$MapS" | grep "xml"` ];then
+		File_map=`ls $WORKDIR | grep "${Sample}_" | grep "$MapS" | grep "xml"`
+	else
+		File_map="$Sample""_mapping_summary_report.xml"
+	fi
+	if [ `ls $WORKDIR | grep "${Sample}_" | grep "$LocR" | grep "xml"` ];then	
+		File_Loc=`ls $WORKDIR | grep "${Sample}_" | grep "$LocR" | grep "xml"`
+	else
+		File_Loc="$Sample""_Locally_Realigned_coverage_report.xml"
+	fi
+	echo "${File_Trim}"
+	echo "${File_dup}"
+	echo "${File_map}"
+	echo "${File_Loc}"
+	FLAG=`expr $FLAG + 1`
+	echo "$FLAG" 
+	perl /xx/CLC_Extract_xml.pl $File_Trim $File_dup $File_map $File_Loc $FILE_OUT $FLAG $WORKDIR 
+done
+#########################################
+#!/usr/bin/perl
+
+#According to rowline number extracting information.
+#Extracting information from the Trim report pdf.
+chdir "$ARGV[6]";
+#open TRIM, "$ARGV[0]" or die "Couldn't open $ARGV[0]: $!";
+my $Trim_Line=0;
+my $Locat_Trim_FLAG=0;
+my $Locat_No_before_Trim=0;
+my $No_before_Trim="NA";
+my $Locat_No_after_Trim=0;
+my $No_after_Trim="NA";
+my @SampleInfo=split(/_/,$ARGV[0]);
+
+if(-e $ARGV[0]){
+	open TRIM, "$ARGV[0]";
+	while(<TRIM>){
+		chomp;
+		$Trim_Line += 1;
+		if($_=~m/\(paired\)/){
+			$Locat_Trim_FLAG=$Trim_Line;
+			print "$SampleInfo[0] location of Trim line: $Locat_Trim_FLAG\n";
+			$Locat_No_before_Trim=$Locat_Trim_FLAG+1;
+			$Locat_No_after_Trim=$Locat_Trim_FLAG+3;
+		}
+		if($Trim_Line==$Locat_No_before_Trim){
+			$No_before_Trim=$_;
+			$No_before_Trim=~s/<text.*>([0-9,]+)[ ]?<\/text>/\1/g;
+			$No_before_Trim=~s/,//g;
+		}
+		elsif($Trim_Line==$Locat_No_after_Trim){
+			$No_after_Trim=$_;
+			$No_after_Trim=~s/<text.*>([0-9,]+)[ ]?.*<\/text>/\1/g;
+			$No_after_Trim=~s/,//g;
+			print "Number of reads before trim\tNumber of reads after trim\n";
+			print "$No_before_Trim\t$No_after_Trim\n";
+			break;
+		}
+	}
+}
+else{
+	print "$ARGV[0] is not existing.";
+}
+#Extracting information from the duplicates removal report pdf.
+#open DRR, "$ARGV[1]" or die "Couldn't open $ARGV[1]: $!";
+my $LineNum = 0;
+my $Locat_DRR_FLAG=0;
+my $Locat_Dup=0;
+my $Dup="NA";
+my $Locat_Rem=0;
+my $REMAINING_Seq="NA";
+my @SampleInfo=split(/_/,$ARGV[1]);#split(/\s/,$ARGV[1])
+
+if(-e $ARGV[1]){
+	open DRR, "$ARGV[1]";
+	while(<DRR>){
+		chomp;
+		$LineNum +=1;
+		if($_=~m/\(Reads\)/){
+			$Locat_DRR_FLAG=$LineNum;
+			$Locat_Rem=$Locat_DRR_FLAG+3;
+			$Locat_Dup=$Locat_DRR_FLAG+4;
+		}
+		if($LineNum==$Locat_Rem){
+			$REMAINING_Seq=$_;
+			$REMAINING_Seq=~s/,//g;
+			$REMAINING_Seq=~s/<text.*>([0-9]+)[ ]?<\/text>/\1/g;
+		}
+		elsif($LineNum==$Locat_Dup){
+			$Dup=$_;
+			$Dup=~s/<text.*>([0-9]+\.[0-9]+)[ ]?<\/text>/\1/g;
+			$Dup=~s/\s//g;
+			print "SampleName\tDuplicate(%)\tRemaining sequences(Removed Duplicates)\n";
+			print "$SampleInfo[0]\t${Dup}%\t$REMAINING_Seq\n";
+			break;
+		}
+	}
+}
+else{
+	print "$ARGV[1] is not exsiting.";
+}
+#Extracting the mapping summary report pdf.
+
+#open MSR, "$ARGV[2]" or die "Couldn't open $ARGV[2]: $!";
+my $MSR_Line = 0;
+my $Locat_MSR_FLAG=0;
+my $Locat_Total=0;
+my $Total_Reads="NA";
+my $Locat_Mapped=0;
+my $Mapped_Reads="NA";
+my $Locat_Percent=0;
+my $Percent_Reads="NA";
+my @MSR_SampleInfo=split(/_/,$ARGV[2]);
+
+if(-e $ARGV[2]){
+	open MSR, "$ARGV[2]";
+	while(<MSR>){
+		chomp;
+		$MSR_Line +=1;
+		if($_=~m/Mapped reads/){
+			$Locat_MSR_FLAG=$MSR_Line;
+			$Locat_Mapped=$Locat_MSR_FLAG+1;
+			$Locat_Percent=$Locat_MSR_FLAG+2;
+			$Locat_Total=$Locat_MSR_FLAG+21;
+		}
+		if($MSR_Line==$Locat_Mapped){
+			$Mapped_Reads=$_;
+			$Mapped_Reads=~s/<text.*>([0-9,]+)[ ]?<\/text>/\1/g;
+			$Mapped_Reads=~s/,//g;
+		}
+		elsif($MSR_Line==$Locat_Percent){
+			$Percent_Reads=$_;
+			$Percent_Reads=~s/<text.*>([0-9]+\.[0-9]+[%]?)[ ]?<\/text>/\1/g;
+		}
+		elsif($MSR_Line==$Locat_Total){
+			$Total_Reads=$_;
+			$Total_Reads=~s/<text.*>([0-9,]+)[ ]?<\/text>/\1/g;
+			$Total_Reads=~s/,//g;
+			print "Total reads(Count)\tMapped reads(Count)\tPercentage of reads(%)\n";
+			print "$Total_Reads\t$Mapped_Reads\t$Percent_Reads\n";
+			break;
+		}
+	}
+}
+else{print "$ARGV[2] not exists.";}
+#Extracting the Locally coverage report pdf.
+#open COV_BELOW, "$ARGV[3]" or die "Couldn't open $ARGV[3]: $!";
+my $PRE_COV;
+my $COV_BELOW_Line=0;
+
+if(-e $ARGV[3]){
+	open COV_BELOW, "$ARGV[3]";
+	while(<COV_BELOW>){
+		chomp;
+		$COV_BELOW_Line +=1;
+		if($_=~m/<text.*>Number of target regions with coverage below \d+[ ]?<\/text>/){
+			$PRE_COV=$_;
+			$PRE_COV =~s/<text.*>Number of target regions with coverage below (\d+)[ ]?<\/text>/\1/g;
+			#$PRE_COV=$&;
+			$PRE_COV=~s/\s//g;
+			break;	
+		}
+	}
+	close(COV_BELOW);
+}
+else{print "$ARGV[3] not exists.";}
+#close(COV_BELOW);
+
+#open LCR, "$ARGV[3]" or die "Couldn't open $ARGV[3]: $!";
+my $LCR_Line = 0;
+my $Locat_Target=0;
+my $Locat_Ave_Coverage=0;
+my $Ave_Coverage="NA";
+my $Locat_No_Below=0;
+my $No_Below="NA";
+my $Locat_Total_Length_Below=0;
+my $Total_Length_Below="NA";
+my $Locat_Minimum_Coverage=0;
+my $Minimum_Coverage="NA";
+my $Locat_Specificity=0;
+my $Specificity="NA";
+my $Locat_NTR=0;
+my $NTR="NA";
+my $Locat_TLTR=0;
+my $TLTR="NA";
+my $Fold0point2="NA";
+my $Fold0point2_Row=0;
+if(-e $ARGV[3]){
+	open LCR, "$ARGV[3]";
+	while(<LCR>){
+		chomp;
+		$LCR_Line +=1;
+		if($_=~m/<text.*><b>1\. Target regions<\/b><\/text>/){
+			$Locat_Target=$LCR_Line;
+			$Locat_NTR=$Locat_Target+3;
+			$Locat_TLTR=$Locat_Target+5;
+			$Locat_Ave_Coverage=$Locat_Target+7;
+			$Locat_No_Below=$Locat_Target+9+2;
+			$Locat_Total_Length_Below=$Locat_Target+11+3;
+			print "Pre-Coverage: $PRE_COV\n";
+		}
+		elsif($_=~m/<text.*><b>1\.5 Minimum coverage of target regions<\/b><\/text>/){
+			if($PRE_COV==500){
+				$Locat_Minimum=$LCR_Line;
+				$Locat_Minimum_Coverage=$Locat_Minimum+12;
+			}
+			else{
+				$Locat_Minimum=$LCR_Line;
+				$Locat_Minimum_Coverage=$Locat_Minimum+10;
+			}
+		}
+		elsif($_=~m/<text.*><b>2\. Targeted region overview<\/b><\/text>/){
+			
+			$Locat_Targeted=$LCR_Line;
+			$Locat_Specificity=$Locat_Targeted+146;
+		}
+		elsif($_=~m/<text.*><b>3\.1 Base coverage<\/b><\/text>/){
+			$Locat_tmp_base_coverage=$LCR_Line;
+			$Fold0point2_Row=$Locat_tmp_base_coverage+6;
+		}
+		if($LCR_Line==$Locat_NTR){
+			$NTR=$_;
+			$NTR=~s/<text.*>([0-9,]+)[ ]?<\/text>/\1/g;
+			$NTR=~s/,//g;
+		}
+		elsif($LCR_Line==$Locat_TLTR){
+			$TLTR=$_;
+			$TLTR=~s/<text.*>([0-9,]+)[ ]?<\/text>/\1/g;
+			$TLTR=~s/,//g;
+		}
+		elsif($LCR_Line==$Locat_Ave_Coverage){
+			$Ave_Coverage=$_;
+			$Ave_Coverage=~s/<text.*>([0-9,]+\.[0-9]+)[ ]?<\/text>/\1/g;
+			$Ave_Coverage=~s/,//g;
+		}
+		elsif($LCR_Line==$Locat_No_Below){
+			$No_Below=$_;
+			$No_Below=~s/<text.*>([0-9,]+)[ ]?<\/text>/\1/g;
+		}
+		elsif($LCR_Line==$Locat_Total_Length_Below){
+			$Total_Length_Below=$_;
+			$Total_Length_Below=~s/<text.*>([0-9,]+)[ ]?<\/text>/\1/g;
+			$Total_Length_Below=~s/,//g;
+		}
+		elsif($LCR_Line==$Locat_Minimum_Coverage){
+			$Minimum_Coverage=$_;
+			$Minimum_Coverage=~s/<text.*>([0-9]+\.[0-9]+[%]?)[ ]?<\/text>/\1/g;
+		}
+		elsif($LCR_Line==$Locat_Specificity){
+			$Specificity=$_;
+			$Specificity=~s/<text.*>([0-9]+\.[0-9]+)[ ]?<\/text>/\1/g;
+			$Specificity=~s/\s//g;
+		}
+		elsif($LCR_Line==$Fold0point2_Row){
+			$Fold0point2=$_;
+			$Fold0point2=~s/<text.*>([0-9]+\.[0-9]+[%]?)[ ]?<\/text>/\1/g;
+			print "Average Coverage\tNumber of target regions with coverage below $PRE_COV\tMinimum coverage of target region\tSpecificity\t Number target regions\tTotal length of target regiosn\n";
+			print "$Ave_Coverage\t$No_Below\t$Minimum_Coverage\t$Specificity\t$NTR\t$TLTR\n";
+			break;
+		}
+		else{next;}
+	}
+}
+else{print "$ARGV[3] not exists.";}
+open OUT, ">>$ARGV[4]" or die "Couldn't open $ARGV[4]: $!";
+my $FLAG=$ARGV[5];
+if($FLAG == 1){
+	print OUT "Sample\tNumber of reads before trim\tNumber of reads after trim\tTotal reads(Count)\tMapped reads(Count)\t Percentage of reads\t Duplicates(%)\tRemaining sequences(Removed Duplicates)\tAverage coverage\tNumber of target regions with coverage below $PRE_COV\tTotal length of regions of targets with coverage below $PRE_COV\tMinimum coverage of target region(Coverage $PRE_COV---%)\tSpecificity(%)\tBase Coverage(0.2x)\tNumber target regions\tTotal length of target regiosn\n";
+}
+print OUT "$SampleInfo[0]\t$No_before_Trim\t$No_after_Trim\t$Total_Reads\t$Mapped_Reads\t$Percent_Reads%\t${Dup}%\t$REMAINING_Seq\t$Ave_Coverage\t$No_Below\t$Total_Length_Below\t$Minimum_Coverage%\t${Specificity}%\t$Fold0point2%\t$NTR\t$TLTR\n";
+close(TRIM);
+close(DRR);
+close(MSR);
+close(LCR);
+close(OUT);
+########################################################
+#!/usr/bin/bash
+
+BAM_PATH=$1
+cd $BAM_PATH
+BAM_FILE=(`ls $BAM_PATH | grep 'bam' | uniq`)
+#/xx/genome_tools/speedseq/bin/bwa mem -t 1 -R @RG\tID:id\tSM:matepair_dat_15\tLB:lib hg19.fa matepair_dat_15x1.fq matepair_dat_15x2.fq
+for Bam in ${BAM_FILE[@]}
+do
+	echo "Sample bam file: " $Bam	
+	echo "Step 1. Create a configuration file using bam2cfg.pl"
+	#SAMPLE=echo "$Bam" | awk -F "." '{print $1}'
+	BAM_cfg=$Bam".config"
+	perl /xx/breakdancer/perl/bam2cfg.pl -g -h $Bam > $BAM_cfg 
+	echo "echo Step 2. Run breakdancer-max ......"
+	BAM_CNV=$BAM_cfg".cnv.out"
+	/xx/breakdancer/build/bin/breakdancer-max -a $BAM_cfg > $BAM_CNV
+	BAM_trans_rearrangement=$BAM_cfg".trans.rearran.out"
+	/xx/breakdancer/build/bin/breakdancer-max -t $BAM_cfg > $BAM_trans_rearrangement
+done
+########################################################################
+#!/bin/bash
+
+Input_Path=$1
+
+SampleName=(`ls $Input_Path | grep 'below' |awk -F "_" '{print $1}' | uniq`)
+echo "The total number of the samples: " ${#SampleName[*]}
+echo "Sample Name: " ${SampleName[@]}
+cd $Input_Path
+#`rename 's/ /_/g' *`
+#`rename 's/[(),]//g' *`
+for Sample in ${SampleName[@]}
+do
+	echo "Sample: " $Sample
+	echo "Creating Below $Below_Coverage file to save results ......"
+	Suffix="only.txt"
+	Temp_File="${Sample}""_""$Suffix"
+	TXT_File=`ls $Input_Path | grep "${Sample}_" | grep "100coverage_results" | grep "txt"`
+	perl Only.pl $TXT_File $Temp_File
+done
+##
+#Only.pl
+#!/usr/bin/perl -w
+
+#use strict;
+
+open INPUT, "<$ARGV[0]" or die "Couldn't open the $ARGV[0]: $! ";
+open OUTPUT, ">$ARGV[1]";
+my %Count;
+while(<INPUT>){
+	my $str="";
+	chomp;
+	if($_=~m/Mapping/){
+		print OUTPUT "Chr\tGene\tRegion\tSame Region Number\n";
+	}
+	else{
+		my ($one,$two,$three,$four,$five,$six,$seven)=split("\t",$_);
+		$str=$one."#".$three."#".$four;
+		if(!exists $Count{$str}){
+			$Count{$str}=1;
+		}
+		else{$Count{$str}+=1;}	
+	}
+}
+
+foreach my $KEY (sort keys %{Count}){
+	my ($A,$B,$C)=split("#",$KEY);
+	print OUTPUT "$A\t$B\t$C\t$Count{$KEY}\n";
+}
+close(INPUT);
+close(OUTPUT);
+#####################################################
+#!/bin/bash
+
+Input_Path=$1
+Below_Coverage=$2
+
+SampleName=(`ls $Input_Path | grep txt | awk -F " " '{print $1}' | uniq`)
+echo "The total number of the samples: " ${#SampleName[*]}
+echo "Sample Name: " ${SampleName[@]}
+cd $Input_Path
+#`rename 's/ /_/g' *`
+#`rename 's/[(),]//g' *`
+for Sample in ${SampleName[@]}
+do
+	echo "Sample: " $Sample
+	#echo "Creating Below $Below_Coverage file to save results ......"
+	Suffix="below_""$Below_Coverage""coverage_results.txt"
+	Temp_File="${Sample}""_""$Suffix"
+	TXT_File=`ls $Input_Path | grep "${Sample}" | grep "txt"`
+	#mv $TXT_File_TMP ${Sample}"_coverage_table.txt"
+	#TXT_File=`ls $Input_Path | grep "${Sample}_" | grep "txt"`
+	
+	echo "TMP: " $TXT_File
+	perl Below_Coverage.pl "${TXT_File}" $Below_Coverage $Temp_File
+done
+##Below_Coverage.pl
+#!/usr/bin/perl -w
+#use strict;
+open INPUT, "<$ARGV[0]" or die "Couldn't open the $ARGV[0]: $! ";
+open OUTPUT, ">$ARGV[2]";
+my $Coverage_Below=$ARGV[1];
+my $Line=0;
+my @INFO;
+my $Number=0;
+while(<INPUT>){
+	$Line+=1;
+	chomp;
+	#$_=~m/Mapping/
+	if($Line<=1){
+		print OUTPUT "$_\n";
+	}
+	else{
+		@INFO=split("\t",$_);
+		if($INFO[6]<$Coverage_Below){
+			$Number+=1;
+			print OUTPUT "$_\n";
+		}
+	}
+}
+print "Total number(Below $Coverage_Below): $Number\n";
+print "\n";
+close(INPUT);
+close(OUTPUT);
+################################################
+#!/usr/bin/perl -w
+#use strict;
+open INPUT, "<$ARGV[0]" or die "Couldn't open the $ARGV[0]: $! ";
+open OUTPUT, ">$ARGV[1]" or die "Couldn't open the $ARGV[1]: $!";
+my %Region;
+my %Count;
+#my $mynum=0;
+my $FLAG=0;
+while(<INPUT>){
+	my $str="";
+	chomp;
+	if($_=~m/Chr/){
+		$FLAG+=1;
+		if($FLAG<=1){
+			print "Chr\tGene\tRegion\tSame Region Number\tCount within Samples\n";
+		}
+		next;
+	}
+	else{
+		my ($one,$two,$three,$four)=split("\t",$_);
+		$str=$one."#".$two."#".$three;
+		if(!exists $Count{$str}){
+			$Count{$str}=$four;
+		}
+		else{$Count{$str}+=$four;}
+		if(!exists $Region{$str}){
+			$Region{$str}=1;
+		}
+		else{$Region{$str}+=1;}	
+	}
+}
+#print OUTPUT "Chr,Gene,Region,Same Region Number,Count within Samples\n";
+print OUTPUT "Chr\tGene\tRegion\tSame Region Number\tCount within Samples\n";
+#while(($key,$value) = each %Region){
+foreach my $key1 ( sort keys %Count){
+	my ($chr,$gene,$region)=split("#",$key1);
+	#print OUTPUT "$chr,$gene,$region,$Count{$key1},$Region{$key1}\n";
+	print OUTPUT "$chr\t$gene\t$region\t$Count{$key1}\t$Region{$key1}\n";
+}
+close(INPUT);
+close(OUTPUT);
+#################################################################
+#!/bin/bash
+
+if [ $# -le 1 ];then
+	echo -e "Usage:
+	\tInputpath\t---The path is placed the CLC analysis results.\n
+	\tFILE_OUT\t---The file is saving the extracting information from the duplicate removal report, mapping summary report and Locally report.\n
+	\tOutpath\t---The final files are saved in the path.\n"
+	#\tProgram\t---The perl script generates the QC information file.\n
+	exit 1
+elif [ $# -ge 2 ];then
+	PREPATH="/data/clc_result/"
+	Inputpath=${PREPATH}"$1""/output"
+	#Program="$2" #NGS_Bio_QC_Verify.pl
+	FILE_OUT="$2"
+	if [ ${FILE_OUT##*.}!="csv" ];then
+		FILE_OUT=${FILE_OUT%.*}".csv"
+	fi
+	DupR="removal" #"duplicate"
+	MapS="mapping"
+	LocR="coverage"
+	echo "Creating the temp work space ......"
+	WORKDIR=/home/cdx/Temp_CLC
+	if [ ! -d $WORKDIR ];then
+		mkdir -p $WORKDIR
+	fi
+	cd $WORKDIR #/data/clc_result/181218_NB551557_0008_AH55J2AFXY/output
+	rm -rf *
+	cp $Inputpath/*.* $WORKDIR
+	rm -f *.bam
+	rm -f *.bam.bai
+	scp cdx@10.20.66.5:/data/PDF/* $WORKDIR
+	#cp $Inputpath/*report.pdf $WORKDIR;#cp $Inputpath/*report\).pdf $WORKDIR
+	DIR="TransTxt"
+	FLAG=0
+	SampleName=(`ls $Inputpath | awk -F "_" '{print $1}' | uniq`)
+	echo "The total number of the samples: " ${#SampleName[*]}
+	echo "Sample Name: " ${SampleName[@]}
+	echo "The pdftohtml is used to extract the QC information from some of reports by generated the CLC." 
+	if [ ! -d $DIR ];then
+		mkdir $DIR
+	fi
+	cd $DIR
+	cp $WORKDIR/*report.pdf $WORKDIR/$DIR/
+	cp $WORKDIR/*report\).pdf $WORKDIR/$DIR/
+	echo "Renamed the pdf file in workspace($DIR)."
+	`rename 's/ /_/g' *`
+	`rename 's/[(),]//g' *`
+	echo "Start process of transforming(xml) ......"
+	for Sample in ${SampleName[@]}
+	do
+		echo "Sample: " $Sample
+		if [ `ls ./ | grep "${Sample}_" | grep "$DupR"` ];then
+			FILE_duplicate=`ls ./ | grep "${Sample}_" | grep "$DupR"`
+			echo "${FILE_duplicate}"
+			pdftohtml -i -s -xml -stdout ${FILE_duplicate}
+		else
+			echo "The duplicate removal pdf does not exist!!!"
+		fi
+		if [ `ls ./ | grep "${Sample}_" | grep "$MapS"` ];then
+			FILE_mapping=`ls ./ | grep "${Sample}_" | grep "$MapS"`
+			echo "${FILE_mapping}"
+			pdftohtml -i -s -xml -stdout ${FILE_mapping}
+		else
+			echo "The mapping report pdf does not exist!!!"
+		fi
+		if [ `ls ./ | grep "${Sample}_" | grep "$LocR"` ];then
+			FILE_Locally=`ls ./ | grep "${Sample}_" | grep "$LocR"`
+			echo "${FILE_Locally}"
+			pdftohtml -i -s -xml -stdout ${FILE_Locally}
+		else
+			echo "The locally report pdf does not exist!!!"
+		fi
+		if [ `ls ./ | grep "${Sample}_" | grep "$DupR" | grep "xml"` ];then
+			File_dup=`ls ./ | grep "${Sample}_" | grep "$DupR" | grep "xml"`
+		else
+			File_dup="$Sample""_duplicate_removal_report.xml"
+		fi
+		if [ `ls ./ | grep "${Sample}_" | grep "$MapS" | grep "xml"` ];then
+			File_map=`ls ./ | grep "${Sample}_" | grep "$MapS" | grep "xml"`
+		else
+			File_map="$Sample""_mapping_summary_report.xml"
+		fi
+		if [ `ls ./ | grep "${Sample}_" | grep "$LocR" | grep "xml"` ];then
+			File_Loc=`ls ./ | grep "${Sample}_" | grep "$LocR" | grep "xml"`
+		else
+			File_Loc="$Sample""_Locally_Realigned_coverage_report.xml"
+		fi
+		echo "Transformed files(xml): "
+		echo "${File_dup}"
+		echo "${File_map}"
+		echo "${File_Loc}"
+		FLAG=`expr $FLAG + 1`
+		echo "$FLAG" 
+		#/data/fastq_raw_data/;/home/cdx/sampling_brca_fastq
+		perl /xx/WXDX_NGS_QC_Extract_v2.pl $File_dup $File_map $File_Loc $FILE_OUT $FLAG $Inputpath $WORKDIR/$DIR $Sample
+	done
+	mv $FILE_OUT ../
+	cd $WORKDIR
+	`rename 's/ /_/g' *`
+	`rename 's/[(),]//g' *`	
+	#The all files are ready, and then those files are archived to public directory for reviewing in Lab.
+	echo -e "The all files have been readying to be archived.\nStarting archiving ......\n"
+	OLD_IFS="$IFS"
+	IFS="/"
+	PATH_INFO=($Inputpath)
+	IFS="$OLD_IFS"
+	INDEX=`expr ${#PATH_INFO[*]} - 2`
+	CLC_BATCH_RUN=${PATH_INFO[$INDEX]}
+	if [ ! $3 ];then
+		Outpath="/data/WXDX_NGS"
+	else
+		Outpath="$3"
+	fi
+	cd $Outpath
+	if [ ! -d $CLC_BATCH_RUN ];then
+		mkdir $CLC_BATCH_RUN
+	fi
+	FileName=(`ls $Inputpath | awk -F "_" '{print $1}' | uniq`)
+	#NGS_PROJECT=(`ls $Inputpath | awk -F "_" '{print $1}' | awk -F "-" '{print $1}' | uniq`)
+	cd $CLC_BATCH_RUN
+	for PROJECT in ${FileName[@]}
+	do
+		echo "Project: " $PROJECT
+		NGS_DIR=`echo $PROJECT | sed "s/\(^[A-Z0-9]*[-][A-Z0-9]*\)[-].*/\1/g"`
+		echo "Dir: " $NGS_DIR
+		if [ ! -d $NGS_DIR ];then
+			mkdir $NGS_DIR
+			MOVEL_FILE=(`ls $WORKDIR | grep "$NGS_DIR"`)
+			echo "The total number of the moving files(Prefix $NGS_DIR): " ${#MOVEL_FILE[*]}
+			for FILE in ${MOVEL_FILE[@]}
+			do
+				mv $WORKDIR/$FILE $NGS_DIR/
+			done
+		fi
+	done
+	if [ -f $WORKDIR/$FILE_OUT ];then
+		mv $WORKDIR/$FILE_OUT $Outpath/$CLC_BATCH_RUN
+	else
+		echo "This NGS project does not need to extract QC information from the CLC analysis results!!!"
+	fi
+	echo "All the files have been archived."
+fi
+###########################################################################
+#!/usr/bin/perl
+
+#Header:
+#	Sequencing machine: MiSeq or NextSeq 550
+#	Downtime:
+#	Analysis time:
+#	Sample Name:
+#	Analysis Pipeline:
+#	The path of the BAM file:
+ 
+#According to rowline number extracting information.
+#Extracting some information from the CLC reports pdf.
+#Information:
+#	Total of Sequence;
+#	Duplicate Rate(%);
+#	Mapping Rate(%);
+#	Average coverage of the target region:
+#	The number of the target region below Minimal Coverage:
+#	Specificity(%) of the target region:
+
+#Go to the work space.
+chdir "$ARGV[6]";
+#open DRR, "$ARGV[0]" or die "Couldn't open $ARGV[0]: $!";
+my $LineNum = 0;
+my $Locat_DRR_FLAG=0;
+my $Locat_Dup=0;
+my $Dup="NA";
+my $Locat_Rem=0;
+my $REMAINING_Seq;
+my $Check1="";
+#my @SampleInfo;#=split(/_/,$ARGV[0]);#split(/\s/,$ARGV[0])
+my $Sample_Name=$ARGV[7];
+#open MSR, "$ARGV[1]" or die "Couldn't open $ARGV[1]: $!";
+my $MSR_Line = 0;
+my $Locat_MSR_FLAG=0;
+my $Locat_Total=0;
+my $Locat_Mapped=0;
+my $Mapped_Reads="NA";
+my $Total_Reads="NA";
+my $Locat_Percent=0;
+my $Percent_Reads="NA";
+my $Check2="NA";
+#my @MSR_SampleInfo;#=split(/_/,$ARGV[1]);
+
+#open LCR, "$ARGV[2]" or die "Couldn't open $ARGV[2]: $!";
+my $LCR_Line = 0;
+my $Locat_Target=0;
+my $Locat_Ave_Coverage=0;
+my $Ave_Coverage="NA";
+my $Check3="NA";
+my $PRE_COV="NA";
+my $Locat_No_Below=0;
+my $No_Below="NA";
+my $Locat_Total_Length_Below=0;
+my $Total_Length_Below="NA";
+my $Locat_Minimum_Coverage=0;
+my $Minimum_Coverage;
+my $Locat_Specificity=0;
+my $Specificity="NA";
+my $Check4="";
+my $Locat_NTR=0;
+my $NTR="NA";
+my $Locat_TLTR=0;
+my $TLTR="NA";
+my $REVIEW_Val="";
+my $Note="";
+
+#print out some information that was extracted from the CLC report pdf to the specified file.
+open OUT, ">>$ARGV[3]";
+my $FLAG=$ARGV[4];
+my $BATCH_RUN_PATH=$ARGV[5];
+if($FLAG == 1){
+	print OUT "The QC Review Table of NGS Bioinformatics\n";
+	print OUT "\n";
+	print OUT "Sequenator,Downtime,BAM path\n";
+}
+my $Sequenator;
+#print OUT "Sequenator\tDowntime\tBAM path\n";
+my @BAM_PATH_INFO=split("/",$BATCH_RUN_PATH);
+my @PROJECT_NAME=split("_",$BAM_PATH_INFO[3]);
+if($BATCH_RUN_PATH=~m/AR/){
+        $Sequenator="NextSeq 550 AR";
+}
+elsif($BATCH_RUN_PATH=~m/M05967/){
+        $Sequenator="MiSeq";
+}
+else{$Sequenator="NextSeq 550";}
+
+if(-e $ARGV[2]){
+	open COV_BELOW,"$ARGV[2]";
+	my $COV_BELOW_Line=0;
+	while(<COV_BELOW>){
+	    chomp;
+	    $COV_BELOW_Line +=1;
+	    if($_=~m/<text.*>Number of target regions with coverage below \d+ <\/text>/){
+		$PRE_COV=$_;
+		$PRE_COV=~s/<text.*>Number of target regions with coverage below (\d+) <\/text>/\1/g;
+		$PRE_COV=~s/\s//g;
+		break;
+	    }
+	}
+}
+else{print "This $ARGV[2]($!) does not exist.\n"}
+close(COV_BELOW);
+
+if($FLAG == 1){
+	print OUT "$Sequenator,$PROJECT_NAME[0],$BATCH_RUN_PATH\n";
+	print OUT "\nReview Date:\t\n";
+	print OUT "Reviwer:\t\n";
+	print OUT "\nSample,Duplicates(%),Check,Total reads,Mapped reads,Percentage of mapped reads,Check,Average Coverage,Check,Number of target regions with coverage below $PRE_COV,Specificity(%),Check,Review,Note\n";
+}
+
+if(-e $ARGV[0]){
+	open DRR, "$ARGV[0]";
+	while(<DRR>){
+		chomp;
+		$LineNum +=1;
+		if($_=~m/\(Reads\)/){
+			$Locat_DRR_FLAG=$LineNum;
+			$Locat_Rem=$Locat_DRR_FLAG+3;
+			$Locat_Dup=$Locat_DRR_FLAG+4;
+		}
+		if($LineNum==$Locat_Rem){
+			$REMAINING_Seq=$_;
+			$REMAINING_Seq=~s/<text.*>([0-9]+) <\/text>/\1/g;
+		}
+		elsif($LineNum==$Locat_Dup){
+			$Dup=$_;
+			$Dup=~s/<text.*>([0-9]+\.[0-9]+) <\/text>/\1/g;
+			$Dup=~s/\s//g;
+			print OUT "$Sample_Name,${Dup}%,$Check1,";
+			break;	
+		}
+	}
+}
+else{
+	print OUT "$Sample_Name,${Dup},$Check1,";
+	print "The $Sample_Name duplicate removal report pdf dose not exist.\n";
+}
+if(-e $ARGV[1]){
+	#Extracting the mapping summary report pdf.
+	open MSR, "$ARGV[1]";
+	while(<MSR>){
+		chomp;
+		$MSR_Line +=1;
+		if($_=~m/Mapped reads/){
+			$Locat_MSR_FLAG=$MSR_Line;
+			$Locat_Mapped=$Locat_MSR_FLAG+1;
+			$Locat_Percent=$Locat_MSR_FLAG+2;
+			$Locat_Total=$Locat_MSR_FLAG+21;
+		}
+		if($MSR_Line==$Locat_Mapped){
+			$Mapped_Reads=$_;
+			$Mapped_Reads=~s/<text.*>([0-9,]+) <\/text>/\1/g;
+			$Mapped_Reads=~s/,//g;
+		}
+		elsif($MSR_Line==$Locat_Percent){
+			$Percent_Reads = $_;
+			$Percent_Reads=~s/<text.*>([0-9]+\.[0-9]+%) <\/text>/\1/g;
+			$Percent_Reads=~s/\s//g;
+			$Percent_Reads=~s/%//g;
+			if($Percent_Reads>=98){
+				$Check2="PASS";
+			}
+			elsif($Percent_Reads>=80 && $Percent_Reads<98){
+				$Check2="WARNING";
+			}
+			else{
+				$Check2="FAIL";
+			}
+		}
+		elsif($MSR_Line==$Locat_Total){
+			$Total_Reads=$_;
+			$Total_Reads=~s/<text.*>([0-9,]+) <\/text>/\1/g;
+			$Total_Reads=~s/,//g;
+			print "Total reads\tMapped reads\tPercentage of mapped reads(%)\tCheck\n";
+			print "$Total_Reads\t$Mapped_Reads\t$Percent_Reads%\t$Check2\n";
+			print OUT "$Total_Reads,$Mapped_Reads,$Percent_Reads%,$Check2,";
+			break;
+		}
+	}
+}
+else{
+	print OUT "$Total_Reads,$Mapped_Reads,$Percent_Reads,$Check2,";
+	print "The $Sample_Name mapping summary report pdf dose not exist.\n";
+}
+if(-e $ARGV[2]){
+	#Extracting the Locally coverage report pdf.
+	open LCR, "$ARGV[2]";
+	while(<LCR>){
+		chomp;
+		$LCR_Line +=1;
+		if($_=~m/<text.*><b>1\. Target regions<\/b><\/text>/){
+			$Locat_Target=$LCR_Line;
+			$Locat_NTR=$Locat_Target+3;
+			$Locat_TLTR=$Locat_Target+5;
+			$Locat_Ave_Coverage=$Locat_Target+7;
+			$Locat_No_Below=$Locat_Target+9;
+			$Locat_Total_Length_Below=$Locat_Target+11;
+			#$Locat_Minimum_Coverage=$Locat_Target+80;
+			print "Pre-Coverage: $PRE_COV\n";
+			if($PRE_COV==500){
+				$Locat_Minimum_Coverage=$Locat_Target+82;
+				$Locat_Specificity=$Locat_Target+289;
+			}
+			elsif($PRE_COV==100){
+				$Locat_Minimum_Coverage=$Locat_Target+80;
+				$Locat_Specificity=$Locat_Target+289;
+				print "Plus 289.\n";
+			}
+			elsif($PRE_COV==20){
+				$Locat_Minimum_Coverage=$Locat_Target+80;
+				$Locat_Specificity=$Locat_Target+291;
+				print "Plus 291.\n";
+			}
+			print "Specificity Location Line: $Locat_Specificity\n";
+		}
+		if($LCR_Line==$Locat_NTR){
+			$NTR=$_;
+			$NTR=~s/<text.*>([0-9,]+) <\/text>/\1/g;
+			$NTR=~s/,//g;
+		}
+		elsif($LCR_Line==$Locat_TLTR){
+			$TLTR=$_;
+			$TLTR=~s/<text.*>([0-9,]+) <\/text>/\1/g;
+			$TLTR=~s/,//g;
+		}
+		elsif($LCR_Line==$Locat_Ave_Coverage){
+			$Ave_Coverage=$_;
+			$Ave_Coverage=~s/<text.*>([0-9,]+\.[0-9]+) <\/text>/\1/g;
+			$Ave_Coverage=~s/,//g;
+			if($Ave_Coverage<$PRE_COV){
+				$Check3="FAIL";
+			}
+			else{$Check3="PASS";}
+		}
+		elsif($LCR_Line==$Locat_No_Below){
+			$No_Below=$_;
+			$No_Below=~s/<text.*>([0-9,]+) <\/text>/\1/g;
+			$No_Below=~s/,//g;
+		}
+		elsif($LCR_Line==$Locat_Total_Length_Below){
+			$Total_Length_Below=$_;
+			$Total_Length_Below=~s/<text.*>([0-9,]+) <\/text>/\1/g;
+			$Total_Length_Below=~s/,//g;
+		}
+		elsif($LCR_Line==$Locat_Minimum_Coverage){
+			$Minimum_Coverage=$_;
+			$Minimum_Coverage=~s/<text.*>([0-9]+\.[0-9]+%) <\/text>/\1/g;
+		}
+		elsif($LCR_Line==$Locat_Specificity){
+			$Specificity=$_;
+			$Specificity=~s/<text.*>([0-9]+\.[0-9]+) <\/text>/\1/g;
+			$Specificity=~s/\s//g;
+			print "Average Coverage\tNumber of target regions with coverage below $PRE_COV\tSpecificity\t Number target regions\tTotal length of target regiosn\n";
+			print "$Ave_Coverage\t$No_Below\t$Specificity\t$NTR\t$TLTR\n";
+			print OUT "$Ave_Coverage,$Check3,$No_Below,${Specificity}%,$Check4,$REVIEW_Val,$Note\n";
+			break;
+		}
+		else{next;}
+	}
+}
+else{
+	print OUT "$Ave_Coverage,$Check3,$No_Below,${Specificity},$Check4,$REVIEW_Val,$Note\n";
+	print "The $Sample_Name Locally Realigned coverage_report pdf does not exist.\n";
+}
+close(DRR);
+close(MSR);
+close(LCR);
+close(OUT);
+######################################################################
+
+#!/usr/bin/bash
+VCF=$1
+OUT=$2
+perl /xx/annovar/table_annovar.pl $VCF /xx/annovar/humandb/ -buildver hg19 -out $OUT -remove -protocol refGene,dbnsfp31a_interpro,dbnsfp33a,dbscsnv11,ljb26_all,exac03,gnomad_genome,EAS.sites.2015_08,EUR.sites.2015_08,AMR.sites.2015_08,AFR.sites.2015_08,SAS.sites.2015_08,clinvar_20170905 -operation g,f,f,f,f,f,f,f,f,f,f,f,f -nastring . -vcfinput
+#######################################################################
+open(DATA,"Homo_sapiens.GRCh37.87.gtf");
+while(<DATA>){
+	chomp;
+	if($_=~m/^#/){
+		next;
+	}
+	elsif(/exon_number "(\d+)"; gene_name "(.+)"; gene_source.+transcript_name "(.+)"; transcript_source/){
+		@line=split(/\t/,$_);
+		if($line[2] eq "exon"){
+			$chr=$line[0];
+			$str=$line[3];
+			$end=$line[4];
+			$exo=$1;
+			$gene=$2;
+			$trc=$3;
+			print "$chr\t$str\t$end\t$gene\t$trc\texn$exo\n";
+		}
+	}
+}
+close(DATA);
+############################
+@list=`cat list2.txt`;
+
+foreach(@list){
+	chomp;
+	$hash{$_}=1;
+}
+
+open(DATA,"Homo_sapiens.GRCh37.87.gtf");
+open OUT,">$ARGV[0]";
+while(<DATA>){
+        chomp;
+        if(/^#/){
+        }else{
+                @line=split(/\t/,$_);
+                $chr=$line[0];
+		$start=$line[3];
+		$end=$line[4];
+                @info=split(/\;/,$line[8]);
+		if($line[2]=~m/exon/){
+         	       foreach(@info){
+                	        if(/gene_name \"(\w+)\"/){
+                        	        if(exists $hash{$1}){
+						print OUT "$chr\t$start\t$end\t$1\n";
+                                	}
+                        	}
+#				elsif(/gene_name \"(\w+\d+)\"/){
+#					if(exists $hash{$1}){
+#						print OUT "$chr\t$start\t$end\t$1\n";
+#					}
+#				}
+                	}
+        	}
+	}
+}
+close(DATA);
+close(OUT);
+#################################################
+#!/usr/bin/python
+
+import sys
+import re
+
+VCF1=sys.argv[1]
+VCF2=sys.argv[2]
+#VCF3=sys.argv[3]
+
+SET1=[]
+SET2=[]
+SET3=[]
+def MAF_SET(VCF):
+    SET=[]
+    with open(VCF,'r') as F:
+        for line in F.readlines():
+            if(re.search(r"^#",line)):
+                continue
+            else:
+                INFO=line.strip().split("\t")
+                #tmp_element="#".join([INFO[0],INFO[1],INFO[3],INFO[4]])
+                tmp_element="#".join([INFO[0],INFO[1]])
+                SET.append(tmp_element)
+    return(SET)
+
+SET1=MAF_SET(VCF1)
+SET2=MAF_SET(VCF2)
+#SET3=MAF_SET(VCF3)
+
+print("%s; Variants: %s" % (VCF1,len(SET1)))
+print("%s; Variants: %s" % (VCF2,len(SET2)))
+#print("%s; Variants: %s" % (VCF3,len(SET3)))
+DIFF_SET=set(SET1).difference(set(SET2))
+BATCH2_set=set(SET1).intersection(set(SET2))
+#BATCH3_set=set(SET1).intersection(set(SET2),set(SET3))
+print("Intersection size: %s" % len(BATCH2_set))
+print("VCF1: %.4f" % (len(BATCH2_set)*1.0/len(set(SET1))))
+print("VCF2: %.4f" % (len(BATCH2_set)*1.0/len(set(SET2))))
+#print("VCF3: %.4f" % (len(BATCH3_set)*1.0/len(set(SET3))))
+#print("Concordance percent: %.4f" % (((len(BATCH3_set)*1.0/len(set(SET1)))+(len(BATCH3_set)*1.0/len(set(SET2)))+(len(BATCH3_set)*1.0/len(set(SET3))))/3))
+print("Difference: %s" %DIFF_SET)
+##################################################
+#!/usr/vin/python
+#Python2 environment
+
+import os
+import sys
+import glob
+import re
+import subprocess
+
+FILE_PATH=sys.argv[1]
+
+FILES_LIST=glob.glob(FILE_PATH+"/*unstable")
+Regions5_MSI_DICT={"Chr2:39536613-39536793":"MONO-27(T)27","Chr2:47641483-47641663":"BAT26(A)27","Chr2:95849283-95849463":"NR24(T)23","Chr4:55598123-55598303":"BAT25(T)25","Chr14:23652267-23652447":"NR21(A)21"}
+Regions5_MSI_ID=["Chr2:39536613-39536793","Chr2:47641483-47641663","Chr2:95849283-95849463","Chr4:55598123-55598303","Chr14:23652267-23652447"]
+MSI_27REGION_BED="/xx/BED/TMB_MSI_hg19_NoChr.bed"
+
+BED_LIST=[]
+with open(MSI_27REGION_BED,"r") as BEDF:
+    for line in BEDF.readlines():
+        BED_INFO=line.strip("\n").split("\t")
+        chr_region="Chr"+BED_INFO[0]+":"+BED_INFO[1]+"-"+BED_INFO[2]
+        if chr_region not in BED_LIST:
+            if chr_region in Regions5_MSI_ID:
+                BED_LIST.append(chr_region+"("+Regions5_MSI_DICT[chr_region]+")")
+            else:
+                BED_LIST.append(chr_region)
+#print(BED_LIST)
+sorted_BED_LIST=sorted(BED_LIST)
+#print(sorted_BED_LIST)
+HEADER_TMP="\t".join(BED_LIST)
+HEADER="Sample\t"+HEADER_TMP
+#print(HEADER)
+BED_LIST_DICT=dict(zip(BED_LIST,[0]*len(BED_LIST)))
+#out="\t".join(BED_LIST_DICT[BED_LIST[0:26]])
+#print(BED_LIST_DICT)
+#print(out)
+
+with open(FILE_PATH+"/Total_MSI_INFO.txt",'a+') as F:
+    #F.write("Sample\tChr2:39536613-39536613(MONO-27(T)27)\tChr2:47641483-47641663(BAT26(A)27)\tChr2:95849283-95849463(NR24(T)23)\tChr4:55598123-55598303(BAT25(T)25)\tChr14:23652267-23652447(NR21(A)21)\tChr1:120053269-120053449\tChr2:51288442-51288622\t")
+    F.write(HEADER+"\n")
+    for fmsi in FILES_LIST:
+        with open(fmsi,"r") as TMPF:
+            FILE_INFO=fmsi.split("/")
+            SAMPLE_INFO=FILE_INFO[len(FILE_INFO)-1].split("_msi")
+            tmp_row_line=0
+            BED_LIST_DICT=dict(zip(BED_LIST,[0]*len(BED_LIST)))
+            for tmpline in TMPF.readlines():
+                tmp_row_line+=1
+                if(tmp_row_line>1):
+                    TMP_INFO=tmpline.strip("\n").split("\t")
+                    for bed in BED_LIST_DICT.keys():
+                        BED_INFO=bed.split("(")
+                        CHR_INFO=BED_INFO[0].split(":")
+                        REGION_INFO=CHR_INFO[1].split("-")
+                        #print("Pos:%s; End:%s" %(REGION_INFO[0],REGION_INFO[1]))
+                        #print("%s" % CHR_INFO[0])
+                        #print("%s" % ("Chr"+TMP_INFO[0]))
+                        if(CHR_INFO[0]==("Chr"+TMP_INFO[0])):
+                            print("Pos:%s; End:%d" %(int(REGION_INFO[0]),int(REGION_INFO[1])))
+                            print("Search location %d" % int(TMP_INFO[1]))
+                            if((int(REGION_INFO[0])<int(TMP_INFO[1]))&(int(TMP_INFO[1])<int(REGION_INFO[1]))):
+                                    
+                                    BED_LIST_DICT[bed]+=1
+                                    print("value: %s" % BED_LIST_DICT[bed])
+            F.write(SAMPLE_INFO[0]+"\t"+str(BED_LIST_DICT[BED_LIST[0]])+"\t"+str(BED_LIST_DICT[BED_LIST[1]])+"\t"+str(BED_LIST_DICT[BED_LIST[2]])+"\t"+str(BED_LIST_DICT[BED_LIST[3]])+"\t"+str(BED_LIST_DICT[BED_LIST[4]])+"\t"+str(BED_LIST_DICT[BED_LIST[5]])+"\t"+str(BED_LIST_DICT[BED_LIST[6]])+"\t"+str(BED_LIST_DICT[BED_LIST[7]])+"\t"+str(BED_LIST_DICT[BED_LIST[8]])+"\t"+str(BED_LIST_DICT[BED_LIST[9]])+"\t"+str(BED_LIST_DICT[BED_LIST[10]])+"\t"+str(BED_LIST_DICT[BED_LIST[11]])+"\t"+str(BED_LIST_DICT[BED_LIST[12]])+"\t"+str(BED_LIST_DICT[BED_LIST[13]])+"\t"+str(BED_LIST_DICT[BED_LIST[14]])+"\t"+str(BED_LIST_DICT[BED_LIST[15]])+"\t"+str(BED_LIST_DICT[BED_LIST[16]])+"\t"+str(BED_LIST_DICT[BED_LIST[17]])+"\t"+str(BED_LIST_DICT[BED_LIST[18]])+"\t"+str(BED_LIST_DICT[BED_LIST[19]])+"\t"+str(BED_LIST_DICT[BED_LIST[20]])+"\t"+str(BED_LIST_DICT[BED_LIST[21]])+"\t"+str(BED_LIST_DICT[BED_LIST[22]])+"\t"+str(BED_LIST_DICT[BED_LIST[23]])+"\t"+str(BED_LIST_DICT[BED_LIST[24]])+"\t"+str(BED_LIST_DICT[BED_LIST[25]])+"\t"+str(BED_LIST_DICT[BED_LIST[26]])+"\n")
+#####################################################
+#!/usr/bin/python
+
+import os
+import sys
+import glob
+import subprocess
+
+BAM_PATH=sys.argv[1]
+BAM_FILES=glob.glob(BAM_PATH+"/*.bam")
+FASTA_REF="/xx/human_genome/b37_less_CEUtrio_data/human_g1k_v37.fasta"
+print(BAM_FILES[0])
+CMD_LIST=[]
+
+for bam in BAM_FILES:
+    FILE_INFO=bam.split("/")
+    SAMPLE_INFO=FILE_INFO[len(FILE_INFO)-1].split(".")
+    DELLY_TRA_OUT=".delly.tra.vcf"
+    DELLY_INV_OUT=".delly.inv.vcf"
+    cmd_tra="/xx/delly_v0.6.3_linux_x86_64bit -t TRA -o "+BAM_PATH+"/"+SAMPLE_INFO[0]+DELLY_TRA_OUT+" -g "+FASTA_REF+" "+bam
+    cmd_inv="/xx/delly_v0.6.3_linux_x86_64bit -t INV -o "+BAM_PATH+"/"+SAMPLE_INFO[0]+DELLY_INV_OUT+" -g "+FASTA_REF+" "+bam
+    p1=subprocess.Popen(cmd_tra,shell=True)
+    CMD_LIST.append(p1)
+    p2=subprocess.Popen(cmd_inv,shell=True)
+    CMD_LIST.append(p2)
+
+for p in CMD_LIST:
+    p.wait()
+print("Delly, detecting the translocation and inversion for the structure variants, has been finished.")
+#####################################
+### LoD Mixed Sampled dealing script###
+#!/usr/bin/python
+
+import sys
+import re
+
+VCF1=sys.argv[1]
+VCF2=sys.argv[2]
+SET1=[]
+SET2=[]
+def MAF_SET(VCF):
+    SET=[]
+    with open(VCF,'r') as F:
+        LINE_NUM=0
+        for line in F.readlines():
+            LINE_NUM+=1
+            if(LINE_NUM<=1): #re.search(r"Chromosome",line)
+                continue
+            else:
+                INFO=line.strip().split("\t")
+                tmp_element="#".join([INFO[0],INFO[1],INFO[3],INFO[4]])
+                SET.append(tmp_element)
+    return(SET)
+
+SET1=MAF_SET(VCF1)
+SET2=MAF_SET(VCF2)
+
+#print("%s; Variants: %s" % (VCF1,len(SET1)))
+#print("%s; Variants: %s" % (VCF2,len(SET2)))
+
+CALLED_SET=set(SET1).intersection(set(SET2))
+MISSED_SET=set(SET1).difference(set(CALLED_SET))
+print("Called Variants: %s" % len(CALLED_SET))
+print("Missed Variants: %s" % len(MISSED_SET))
+
+#DIFF_SET=set(SET1).difference(set(SET2))
+#BATCH3_set=set(SET1).intersection(set(SET2),set(SET3))
+#print("Intersection size: %s" % len(BATCH2_set))
+#print("VCF1: %.4f" % (len(BATCH2_set)*1.0/len(set(SET1))))
+#print("VCF2: %.4f" % (len(BATCH2_set)*1.0/len(set(SET2))))
+"""
+with open(VCF2,'r') as F2:
+    LNUM=0
+    for line in F2.readlines():
+        LNUM+=1
+        line=line.strip("\n")
+        if(LNUM<=1):
+            print(line)
+            continue
+        else:
+            INFO=line.strip().split("\t")
+            tmp_element="#".join([INFO[0],INFO[1],INFO[3],INFO[4]])
+            if(tmp_element in CALLED_SET):
+                print(line)
+"""
+#########################################
+##Except the NA12878 variants
+#!/usr/bin/python
+
+import sys
+import re
+
+VCF1=sys.argv[1]
+VCF2=sys.argv[2]
+
+SET1=[]
+SET2=[]
+def MAF_SET(VCF):
+    SET=[]
+    with open(VCF,'r') as F:
+        LINE_NUM=0
+        for line in F.readlines():
+            LINE_NUM+=1
+            if(LINE_NUM<=1): #re.search(r"Chromosome",line)
+                continue
+            else:
+                INFO=line.strip().split("\t")
+                tmp_element="#".join([INFO[0],INFO[1],INFO[3],INFO[4]])
+                SET.append(tmp_element)
+    return(SET)
+
+SET1=MAF_SET(VCF1)
+SET2=MAF_SET(VCF2)
+
+print("%s; Variants: %s" % (VCF1,len(SET1)))
+print("%s; Variants: %s" % (VCF2,len(SET2)))
+
+BATCH2_set=set(SET1).intersection(set(SET2))
+DIFF_SET=set(SET1).difference(set(SET2))
+#BATCH3_set=set(SET1).intersection(set(SET2),set(SET3))
+print("Intersection size: %s" % len(BATCH2_set))
+print("VCF1: %.4f" % (len(BATCH2_set)*1.0/len(set(SET1))))
+print("VCF2: %.4f" % (len(BATCH2_set)*1.0/len(set(SET2))))
+print("Difference size: %s" % len(DIFF_SET))
+
+DIFF_LIST=list(DIFF_SET)
+with open("BASELINE_NA12550_UNIQ.txt","w+") as F1:
+    with open(VCF1,'r') as F2:
+        LINE_NUM=0
+        for line in F2.readlines():
+            LINE_NUM+=1
+            if(LINE_NUM<=1): #re.search(r"Chromosome",line)
+                F1.write(line)
+                continue
+            else:
+                INFO=line.strip().split("\t")
+                tmp_element="#".join([INFO[0],INFO[1],INFO[3],INFO[4]])
+                if(tmp_element in DIFF_LIST):
+                    F1.write(line)
+####################################################
+# SNP/INDELs split#
+#!/usr/bin/perl
+
+open VCF, "<$ARGV[0]" or die "Couldn't open it $!.";
+my @PREFIX=split(/\./,$ARGV[0]);
+my $SNP_FILE=$PREFIX[0]."_SNP.txt";
+open SNP,">$SNP_FILE";#$ARGV[1]
+my $INSERTION_FILE=$PREFIX[0]."_INSERTION.txt";
+open INSERTION,">$INSERTION_FILE";#$ARGV[2]
+my $DELETION_FILE=$PREFIX[0]."_DELETION.txt";
+open DELETION,">$DELETION_FILE";#$ARGV[3]
+my @INFO;
+my $REF_Length;
+my $ALT_Length;
+my $Length_DIFF;
+my $Num=0;
+my $SNP_NUM=0;
+my $INS_NUM=0;
+my $DEL_NUM=0;
+while(<VCF>){
+	chomp;
+	if($_=~m/^\"Chr/){
+		print SNP "$_\n";
+		print INSERTION "$_\n";
+		print DELETION "$_\n";
+		next;
+	}
+	else{
+		@INFO=split("\t",$_);
+		$INFO[2]=~s/ //g;
+		$Num+=1;
+		$INFO[3]=~s/ //g;
+		$INFO[4]=~s/ //g;
+		#if($Num<10){
+		#	print "$INFO[2]\n";
+		#}
+		$REF_Length=length($INFO[3]);
+		my @TEMP=split(",",$INFO[4]);
+		#$ALT_Length=length($INFO[4]);
+		my $LAST=@TEMP;
+		$LAST=$LAST-1;
+		$ALT_Length=length($TEMP[$LAST]);
+		$Length_DIFF=$ALT_Length-$REF_Length;
+		if($Length_DIFF eq 0){
+			if($INFO[3]=~m/[-]/){
+				$INS_NUM+=1;
+				print INSERTION "$_\n";
+			}
+			elsif($INFO[4]=~m/[-]/){
+				$DEL_NUM+=1;
+				print DELETION "$_\n";
+			}
+			else{
+				$SNP_NUM+=1;
+				print SNP "$_\n";
+			}
+		}
+		elsif($Length_DIFF gt 0){
+			$INS_NUM+=1;
+			#if($INS_NUM<20){print "$INFO[3]\t$INFO[4]\t$Length_DIFF\n";}
+			print INSERTION "$_\n";
+		}
+		elsif($Length_DIFF lt 0){
+			$DEL_NUM+=1;
+			#if($DEL_NUM<20){print "$INFO[3]\t$INFO[4]\t$Length_DIFF\n";}
+			print DELETION "$_\n";
+		}
+		#SNP variations
+	}
+
+}
+print "Total snp: $SNP_NUM\n";
+print "Total insertion: $INS_NUM\n";
+print "Total deletion: $DEL_NUM\n";
+print "Total Variants: $Num\n";
+close(VCF);
+close(SNP);
+close(INSERTION);
+close(DELETION);
+###############################################
+# Homo/Heter variants split#
+#!/usr/bin/perl
+
+open TXT, "<$ARGV[0]" or die "Couldn't open it $!.";
+my @PREFIX=split(/\./,$ARGV[0]);
+my $Homo_FILE=$PREFIX[0]."_Homo.txt";
+open HOMO,">$Homo_FILE";#$ARGV[1]
+my $Heter_FILE=$PREFIX[0]."_Heter.txt";
+open HETER,">$Heter_FILE";#$ARGV[2]
+my @INFO;
+my $Num=0;
+my $HOMO_NUM=0;
+my $HETER_NUM=0;
+while(<TXT>){
+	chomp;
+	if($_=~m/^\"Chr/){
+		print HOMO "$_\n";
+		print HETER "$_\n";
+		next;
+	}
+	else{
+		@INFO=split("\t",$_);
+		#$INFO[2]=~s/ //g;
+		$Num+=1;
+		#if($Num<20){print "$INFO[7]\n";}
+		if($_=~m/Homozygous/){
+			$HOMO_NUM+=1;
+			print HOMO "$_\n"; 
+		}
+		else{
+			$HETER_NUM+=1;
+			print HETER "$_\n";
+		}
+	}
+
+}
+print "Homo: $HOMO_NUM\n";
+print "Heter: $HETER_NUM\n";
+print "Total Variants: $Num\n";
+close(TXT);
+close(HOMO);
+close(HETER);
+##############################################
+#1~30bp condordance#
+#!/usr/bin/perl
+#
+
+sub Number{
+        open(TXT,$_[0]);
+        my $NUM=0;
+        while(<TXT>){
+                chomp;
+                $NUM+=1;
+        }
+        return $NUM;
+}
+
+
+print "Base,ONE,TWO,THREE,Intersect,MEAN_CONCORDANCE,Other_COMPUTE\n";
+foreach $var (1..30){
+	#print "$var\n";
+	$ONE=&Number("$var.list1"); #`wc -l $var.list1 | awk -F " " '{print $1}'`;
+	$TWO=&Number("$var.list2");#`wc -l $var.list2 | awk -F " " '{print $1}'`;
+	$THREE=&Number("$var.list3") ;#`wc -l $var.list3 | awk -F " " '{print $1}'`;
+	$INTERSECTION=&Number("$var.inter.txt");#`wc -l $var.inter.txt | awk -F " " '{print $1}'`;
+	$UNION=&Number("$var.union.txt");#`wc -l $var.union.txt | awk -F " " '{print $1}'`;
+	if($INTERSECTION==0){
+		$Other="NA";
+		print "$var,NA,NA,NA,NA,NA,$Other\n";
+	}
+	else{
+		$Other=$INTERSECTION*1.0/$UNION;
+		$MEAN_CONCORDANCE=($INTERSECTION*1.0/$ONE+$INTERSECTION*1.0/$TWO+$INTERSECTION*1.0/$THREE)/3.0;
+		print "$var,$ONE,$TWO,$THREE,$INTERSECTION,$MEAN_CONCORDANCE,$Other\n";
+	}
+	#print "$var,$ONE,$TWO,$THREE,$INTERSECTION,,$Other\n";
+}
+#########################################
+
+#!/usr/bin/python
+
+
+import sys
+import os
+import glob
+import subprocess
+
+BAM_PATH=sys.argv[1]
+
+BAM_FILES=glob.glob(BAM_PATH+"/*.bam")
+
+CMD_LIST=[]
+
+THREADS=10
+
+for bam in BAM_FILES:
+    FILE_INFO=bam.split("/")
+    SAMPLE_INFO=FILE_INFO[len(FILE_INFO)-1].split(".")
+    print("%s samtools index(bam) ......" % SAMPLE_INFO[0])
+    BAI=FILE_INFO[len(FILE_INFO)-1]+".bai"
+    cmd="samtools index -@ "+str(THREADS)+" "+bam+" "+BAM_PATH+"/"+BAI
+    samtools_index_cmd=subprocess.Popen(cmd,shell=True)
+    CMD_LIST.append(samtools_index_cmd)
+    #print(cmd)
+
+for p in CMD_LIST:
+    p.wait()
+
+print("samtools index process has been finished!")
+#####################################################
+#!/usr/bin/python
+
+import os
+import re
+import sys
+import glob
+#import subprocess
+
+BAM_PATH=sys.argv[1]
+BAM_FILES=glob.glob(BAM_PATH+"/*.bam")
+
+BED_FILE="/cold_data/pipeline/BED/TMB-hg19.bed"
+PID_LIST=[]
+for bam in BAM_FILES:
+    FILE_INFO=bam.split("/")
+    SAMPLE_INFO=FILE_INFO[len(FILE_INFO)-1].split(".")
+    OUT_TXT=SAMPLE_INFO[0]
+    cmd_mosdepth="/home/wx_clc/genome_tools/mosdepth -b "+BED_FILE+" "+OUT_TXT+" "+bam
+    #print(cmd_mosdepth)
+    os.system(cmd_mosdepth)
+    #tmp_cmd=subprocess.Popen(cmd_bedtool,shell=True)
+    #PID_LIST.append(tmp_cmd)
+#######################################
+
+$file1="$ARGV[0]";
+$file2="$ARGV[1]";
+$file3="$ARGV[2]";
+#$out="$ARGC[4]"
+foreach $base (1..30){
+	&Venn($file1,$file2,$file3,$base);
+}
+sub Venn{
+	my $f1=$_[0];
+	my $f2=$_[1];
+	my $f3=$_[2];
+	my $out=$_[3];
+	my %hash=();
+
+	open(DATA1,$f1);
+	open(FILE1,">$out.list1");
+	while(<DATA1>){
+		chomp;
+		if(/^#/){
+		}else{
+			@line=split(/\t/,$_);
+			if($line[4]==$out){
+				$index="$line[0]\|$line[1]\|$line[2]\|$line[3]";
+				$hash{$index}=1;
+				print FILE1 "$index\n";
+			}
+		}
+	}
+	close(DATA1);
+	close(FILE1);
+
+	open(DATA2,$f2);
+	open(FILE2,">$out.list2");
+	while(<DATA2>){
+		chomp;
+		if(/^#/){
+		}else{
+			@line=split(/\t/,$_);
+			if($line[4]==$out){
+				$index="$line[0]\|$line[1]\|$line[2]\|$line[3]";
+				if(exists $hash{$index}){
+					$hash{$index}++;
+				}else{
+					$hash{$index}=1;
+				}
+				print FILE2 "$index\n";
+			}
+		}
+		#print FILE2 "$index\n";
+	}
+	close(DATA2);
+	close(FILE2);
+
+	open(DATA3,$f3);
+	open(FILE3,">$out.list3");
+	while(<DATA3>){
+		chomp;
+		if(/^#/){
+		}else{
+			@line=split(/\t/,$_);
+			if($line[4]==$out){
+				$index="$line[0]\|$line[1]\|$line[2]\|$line[3]";
+				if(exists $hash{$index}){
+					$hash{$index}++;
+				}else{
+					$hash{$index}=1;
+				}
+				print FILE3 "$index\n";
+			}
+		}
+		#print FILE3 "$index\n";
+	}
+	close(DATA3);
+	close(FILE3);
+
+	open(INT,">$out.inter.txt");
+	open(UNI,">$out.union.txt");
+	foreach(keys %hash){
+		print UNI "$_\n";
+		if($hash{$_} == 3){
+			print INT "$_\n";
+		}
+	}
+	close(INT);
+	close(UNI);
+
+	open(FILE,">$out.Venn.R");
+	print FILE "d1=read.table(\"$out.list1\")\n";
+	print FILE "d2=read.table(\"$out.list2\")\n";
+	print FILE "d3=read.table(\"$out.list3\")\n";
+
+	print FILE "library(VennDiagram)\n";
+
+	print FILE "venn.diagram(list(\'$file1\'=d1\$V1,\'$file2\'=d2\$V1,\'$file3\'=d3\$V1),alpha=c(0.5,0.5,0.5),fill=c(\"red\",\"yellow\",\"blue\"),cat.fontface=4,fontfamily=3,imagetype=\"png\",filename=\"$out.Venn.png\")\n";
+
+	close(FILE);
+
+	`R < $out.Venn.R --vanilla`;
+#	`rm list*`;
+#	`rm *.log`;
+}
+#################################################
+$file1="$ARGV[0]";
+$file2="$ARGV[1]";
+$file3="$ARGV[2]";
+#$out="$ARGC[4]"
+&Venn($file1,$file2,$file3);
+
+sub Venn{
+	my $f1=$_[0];
+	my $f2=$_[1];
+	my $f3=$_[2];
+	#my $out=$_[3];
+	my %hash=();
+
+	open(DATA1,$f1);
+	open(FILE1,">list1");
+	while(<DATA1>){
+		chomp;
+		if(/^#/){
+		}else{
+			@line=split(/\t/,$_);
+			$index="$line[0]\|$line[1]\|$line[2]\|$line[3]\|$line[4]";
+			$hash{$index}=1;
+			print FILE1 "$index\n";
+		}
+	}
+	close(DATA1);
+	close(FILE1);
+
+	open(DATA2,$f2);
+	open(FILE2,">list2");
+	while(<DATA2>){
+		chomp;
+		if(/^#/){
+		}else{
+			@line=split(/\t/,$_);
+			$index="$line[0]\|$line[1]\|$line[2]\|$line[3]\|$line[4]";
+			if(exists $hash{$index}){
+				$hash{$index}++;
+			}else{
+				$hash{$index}=1;
+			}
+		}
+		print FILE2 "$index\n";
+	}
+	close(DATA2);
+	close(FILE2);
+
+	open(DATA3,$f3);
+	open(FILE3,">list3");
+	while(<DATA3>){
+		chomp;
+		if(/^#/){
+		}else{
+			@line=split(/\t/,$_);
+			$index="$line[0]\|$line[1]\|$line[2]\|$line[3]\|$line[4]";
+			if(exists $hash{$index}){
+				$hash{$index}++;
+			}else{
+				$hash{$index}=1;
+			}
+		}
+		print FILE3 "$index\n";
+	}
+	close(DATA3);
+	close(FILE3);
+
+	open(INT,">inter.txt");
+	open(UNI,">union.txt");
+	foreach(keys %hash){
+		print UNI "$_\n";
+		if($hash{$_} == 3){
+			print INT "$_\n";
+		}
+	}
+	close(INT);
+	close(UNI);
+
+	open(FILE,">Venn.R");
+	print FILE "d1=read.table(\"list1\")\n";
+	print FILE "d2=read.table(\"list2\")\n";
+	print FILE "d3=read.table(\"list3\")\n";
+
+	print FILE "library(VennDiagram)\n";
+
+	print FILE "venn.diagram(list(\'$file1\'=d1\$V1,\'$file2\'=d2\$V1,\'$file3\'=d3\$V1),alpha=c(0.5,0.5,0.5),fill=c(\"red\",\"yellow\",\"blue\"),cat.fontface=4,fontfamily=3,imagetype=\"png\",filename=\"Venn.png\")\n";
+
+	close(FILE);
+
+	`R < Venn.R --vanilla`;
+#	`rm list*`;
+#	`rm *.log`;
+}
+####################################################
+#!/usr/bin/python
+
+
+import sys
+import os
+import glob
+import subprocess
+
+BAM_PATH=sys.argv[1]
+
+BAM_FILES=glob.glob(BAM_PATH+"/*.bam")
+
+FASTA_REF="/xx/human_genome/b37_less_CEUtrio_data/human_g1k_v37.fasta"
+NORMAL_BAM_LIST=["TMB-NA12878_L01_L02_L03_L04_126.hg37.aligned.duplicates_marked.recalibrated.bam",
+        "TMB-V00012134N_L01_L02_L03_l04_90.hg37.aligned.duplicates_marked.recalibrated.bam",
+        "TMB-V00012135N_L01_L02_L03_l04_91.hg37.aligned.duplicates_marked.recalibrated.bam",
+        "TMB-V00012140N_L01_L02_98.hg37.aligned.duplicates_marked.recalibrated.bam",
+        "TMB-V00012143N_L01_L02_99.hg37.aligned.duplicates_marked.recalibrated.bam",
+        "TMB-V00012149N_L01_L02_100.hg37.aligned.duplicates_marked.recalibrated.bam"]
+
+#NORMAL_SAMPLE="TMB-NA12878"
+#MSI_TSV="/xx/BED/msi.tsv" #"/xx/MSI_LAB/BAM/msi.tsv"
+MSI_TSV="/xx/MSI_LAB/BAM/msi.tsv"
+CMD_LIST=[]
+
+print("visualmsi detecting the msi status ......")
+for NORMAL_BAM in NORMAL_BAM_LIST:
+    NORMAL_SAMPLE_INFO=NORMAL_BAM.split("/")
+    NORMAL_SAMPLE_INFO_TMP=NORMAL_SAMPLE_INFO[len(NORMAL_SAMPLE_INFO)-1].split(".")
+    NORMAL_SAMPLE=NORMAL_SAMPLE_INFO_TMP[0]
+    for bam in BAM_FILES:
+        FILE_INFO=bam.split("/")
+        SAMPLE_INFO=FILE_INFO[len(FILE_INFO)-1].split(".")
+        JSON=SAMPLE_INFO[0]+"_pair_"+NORMAL_SAMPLE+"_visualmsi.json"
+        HTML=SAMPLE_INFO[0]+"_pair_"+NORMAL_SAMPLE+"_visualmsi.html"
+        LOG=SAMPLE_INFO[0]+"_pair_"+NORMAL_SAMPLE+"_visualmsi.log"
+        cmd="/home/wx_clc/genome_tools/visualmsi -i "+bam+" -n "+NORMAL_BAM+" -r "+FASTA_REF+" -t "+MSI_TSV+" -j "+BAM_PATH+"/"+JSON+" -h "+BAM_PATH+"/"+HTML+" > "+BAM_PATH+"/"+LOG+" 2>&1"
+        #print(cmd)
+        #os.system(cmd)
+        msi_cmd=subprocess.Popen(cmd,shell=True)
+        CMD_LIST.append(msi_cmd)
+
+    for p in CMD_LIST:
+        p.wait()
+
+print("visualMSI analysis has been finished!")
+
+########################################################
+#!/usr/bin/python
+
+import os
+import sys
+import glob
+import json
+
+JSON_PATH=sys.argv[1]
+
+JSON_FILES=glob.glob(JSON_PATH+"/*.json")
+test_num=0
+print("Locus Name\tChrom\tPosition\t EMD distance\tTumor supporting reads\tNormal supporting reads\tSample")
+#test_name=os.system("basename "+JSON_FILES[0])
+
+for js in JSON_FILES:
+    test_num+=1
+    FILE_INFO=js.split("/")
+    SAMPLE_INFO=FILE_INFO[len(FILE_INFO)-1].split("_")
+    #if(test_num==1):
+    with open(js,'r') as F:
+        data=json.load(F)
+        LOCUS_INFO=data['detail']
+        for locus_key,locus_info in LOCUS_INFO.items():
+            print("%s\t%s\t%s\t%s\t%s\t%s\t%s" %(locus_key,locus_info['chrom'],locus_info['position'],locus_info['emd_distance'],locus_info['tumor_supporting_reads'],locus_info['normal_supporting_reads'],SAMPLE_INFO[0]))
+#########################################################
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
