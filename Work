@@ -2675,6 +2675,7 @@ for NORMAL_BAM in NORMAL_BAM_LIST:
 print("visualMSI analysis has been finished!")
 
 ########################################################
+#
 #!/usr/bin/python
 
 import os
@@ -2701,18 +2702,234 @@ for js in JSON_FILES:
             print("%s\t%s\t%s\t%s\t%s\t%s\t%s" %(locus_key,locus_info['chrom'],locus_info['position'],locus_info['emd_distance'],locus_info['tumor_supporting_reads'],locus_info['normal_supporting_reads'],SAMPLE_INFO[0]))
 #########################################################
 
+#!/bin/bash
 
+echo -e "This SV pipeline analysis workflow is started from the fastq.\n
+	For the mate pair library, we splits the fastq file by nxtrim tools.\n
+	Then the bwa mem aligner to map to the reference genome(hg19).\n
+	Calling SV software:\n
+	#	Lumpy\n
+		Delly(0.6.3)\n
+	#	seeksv\n
+	#	TIDDIT: for the DEL SVTYPE\n
+	The reference genome index(samtools) must exit in current directory.\n
+	The bwa indexed reference genome(bwa) must exit in current directory.\n"
+if [ $# -le 2 ];then
+	echo -e "\tUsage:\n
+		\tFASTQ_R1\t---The fastq file R1;\n	
+		\tFASTQ_R2\t---The fastq file R2;\n
+		\tSAMPLE\t---The sample name;\n"
+	exit 1
+else
+	STARTTIME=`date +'%Y-%m-%d %H:%M:%S'`
+	START_SE=`date --date="$STARTTIME" +%s`
+	echo "Examining index or faidx hg19.fa ......"
+        if [ ! -f "hg19.fa.fai" ];then
+                echo "samtools faidx for genome(hg19) ......"
+        	samtools faidx hg19.fa
+        else
+                echo "The genome(hg19) faidx has exist."
+        fi
+        HG19_FILE=(`ls ./ | grep "^hg19" | sed "s/hg19\.[abcfnstw]+//g"`)
+        if [ ${#HG19_FILE[*]} -lt 5 ];then
+                echo "bwa index for genome(hg19) ...... "
+                bwa index -p hg19 hg19.fa
+        else
+                echo "The genome(hg19) bwa index has been indexed."
+        fi
+	echo "The First Step(FASTQ---R1 and R2 QC Report) ......"
+	FASTQ_R1=$1
+	FASTQ_R2=$2
+	SAMPLE=$3
+	echo "############################################################"
+	echo "QC metrics report(no NxTrim-ed fastq) ......"
+	./RUN_BWA_MEM_MatePair_QC.sh $FASTQ_R1 $FASTQ_R2 $SAMPLE
+	echo "############################################################"	
+	echo "NxTriming fastq ......"
+	PREFIX=${SAMPLE}"_nxtrim"
+	nxtrim -1 $FASTQ_R1 -2 $FASTQ_R2 -O $PREFIX
+	echo "NxTrim-ed results includes the mp, pe, se, unknown *.fastq.gz."
+	gunzip *.fastq.gz
+	NxTrim_FASTQ=(`ls ./ | grep "$PREFIX"`)
+	echo "The NxTrimed fastq: " ${NxTrim_FASTQ[@]}
+	
+	for FASTQ in ${NxTrim_FASTQ[@]}
+	do
+		#sed "s/\(nxtrim\.*\)\.fastq/\1/g"
+		Sample_ID=`echo $FASTQ | sed "s/.*_\(.*\)\.fastq$/\1/g"`
+		Sample_ID=`echo $Sample_ID | sed "s/nxtrim\./NxTrim_/g"`
+		Sample_PL="PL:ILLUMINA"
+		Sample_LB="LB:MatePair_library"
+		READ_GROUP="@RG\tID:$Sample_ID\t$Sample_PL\t$Sample_LB\tSM:$SAMPLE"
+		#@RG\tID:NxTrim_MP\tPL:ILLUMINA\tLB:MatePair_library\tSM:R19007403-MTRTI-K562-Inter-3
+		SPLIT_INFO=`echo $FASTQ | awk -F "." '{print $2}'`
+		echo "Sample ID : $Sample_ID"
+		echo "Read Group: $READ_GROUP"
+		if [ $SPLIT_INFO != "se" ];then
+			#Aligning to reference genome(hg19) used by bwa mem
+			NxTrim_PREFIX=`echo $FASTQ | sed "s/\(.*\)\.fastq/\1/g"`
+			echo "NxTrim Prefix: $NxTrim_PREFIX"
+			./RUN_NxTrim_BWA_MEM.sh $FASTQ $NxTrim_PREFIX $READ_GROUP
+		fi
+	done
+	echo "The mp, pe, unknown fastq alignment have been finished."
+	MP_BAM=`ls ./ | grep $SAMPLE | grep "\.mp\.sorted\.bam$"`
+	PE_BAM=`ls ./ | grep $SAMPLE | grep "\.pe\.sorted\.bam$"`
+	UNKNOWN_BAM=`ls ./ | grep $SAMPLE | grep "\.unknown\.sorted\.bam$"`
+	MERGED_BAM=${PREFIX}"_mp_unknown_PicardMerged.bam"
+	MERGED_sorted_BAM=${PREFIX}"_mp_unknown_PicardMerged.sorted.bam"
+	MERGED_sorted_BAM_BAI=$MERGED_sorted_BAM".bai"
+	echo "Picard merges the mp and unknown as MP dataset."
+	java -jar /home/cdx/genome_tools/picard.jar MergeSamFiles I=$MP_BAM I=$UNKNOWN_BAM O=$MERGED_BAM
+	echo "Picard MergeSamFiles had done."
+	MERGED_PREFIX=`echo $MERGED_BAM | sed "s/\(.*\)\.bam/\1/g"`
+	echo "The Picard merged bam file must be sorted ......"
+	samtools sort -@ 30 $MERGED_BAM -o $MERGED_sorted_BAM
+	samtools index $MERGED_sorted_BAM $MERGED_sorted_BAM_BAI
+	#echo "QC metrics report(NxTrim-ed fastq) ......"
+	#./NGS_MatePair_QC.sh $MERGED_sorted_BAM $MERGED_PREFIX
+	echo "Starting excuted the delly v0.6.3 calling tool ......."
+	#Running delly v0.6.3
+	./RUN_delly_v0.6.3.sh $MERGED_sorted_BAM $MERGED_PREFIX
+	echo "delly v0.6.3 running had finished."
+	ENDTIME=`date +'%Y-%m-%d %H:%M:%S'`
+	END_SE=`date --date="$ENDTIME" +%s`
+	echo "Running time of the process: "$((END_SE-START_SE))"s"
+fi
+#########################################
 
+#NGS_MatePair_QC.sh
+#!/bin/bash
 
+echo "Mate Pair QC Report ......"
+SORT_FILE=$1
+PREFIX=$2
+echo "Marking duplicates by picard."
+MARK_DUPLICATE=$PREFIX".sorted.markdup.bam"
+MARK_DUPLICATE_BAI=$MARK_DUPLICATE".bai"
+MARK_METRICS=$PREFIX".sorted.markdup_metrics.txt"
+java -jar /home/cdx/genome_tools/picard.jar MarkDuplicates I=$SORT_FILE O=$MARK_DUPLICATE M=$MARK_METRICS
+echo "The marked duplicates bam file must be sorted by samtools ......"
+samtools index $MARK_DUPLICATE $MARK_DUPLICATE_BAI
+echo "Report some metrics for verifying."
+MARK_DUPLICATE_TXT=$MARK_DUPLICATE".is.txt"
+MARK_DUPLICATE_PDF=$MARK_DUPLICATE".is.pdf"
+MARK_DUPLICATE_STATS=$PREFIX".sorted.markdup.stats.txt"
+java -jar /home/cdx/genome_tools/picard.jar CollectInsertSizeMetrics I=$MARK_DUPLICATE O=$MARK_DUPLICATE_TXT H=$MARK_DUPLICATE_PDF
+samtools stats -@ 16 $MARK_DUPLICATE > $MARK_DUPLICATE_STATS
+echo "Report the MP vs PE and Bridge coverage ......"
+BP_vs_PE_TXT=$PREFIX".MPvsPE.BridgeCov.txt"
+perl MatePair_QC.pl $MARK_DUPLICATE_STATS $MARK_DUPLICATE_TXT $BP_vs_PE_TXT
+echo "The MP vs PE ... metrics QC had generated."
+##################################################
+#RUN_NxTrim_BWA_MEM.sh
+#!/bin/bash
+FASTQ1=$1
+#FASTQ2=$2
+PREFIX=$2
+READ_GROUP=$3
+SAM_FILE=${PREFIX}".sam"
+BAM_FILE=${PREFIX}".bam"
+SORT_FILE=${PREFIX}".sorted.bam"
+BAI_FILE=$SORT_FILE".bai"
+echo "Running bwa mem to alignment ......"
+bwa mem -t 30 -R $READ_GROUP -p hg19 $FASTQ1 > $SAM_FILE
+echo "Transform sam to bam ......"
+samtools view -bS $SAM_FILE > $BAM_FILE
+echo "Running samtools to sort bam ......"
+samtools sort -@ 30 $BAM_FILE -o $SORT_FILE
+samtools index $SORT_FILE $BAI_FILE 
+echo "The bam file had been sorted and indexed!"
+echo "bwa mem finished."
+###############################################
+#RUN_BWA_MEM_MatePair_QC.sh
+##!/bin/bash
+FASTQ1=$1
+FASTQ2=$2
+PREFIX=$3
+SAM_FILE=${PREFIX}".sam"
+BAM_FILE=${PREFIX}".bam"
+SORT_FILE=${PREFIX}".sorted.bam"
+echo "Running bwa mem to alignment ......"
+bwa mem -t 30 hg19 $FASTQ1 $FASTQ2 > $SAM_FILE
+echo "Transform sam to bam ......"
+samtools view -bS $SAM_FILE > $BAM_FILE
+echo "Running samtools to sort bam ......"
+samtools sort -@ 30 $BAM_FILE -o $SORT_FILE
+echo "Finished sorting bam!"
+echo "bwa mem finished."
+#rm -f $SAM_FILE $BAM_FILE
+echo "QC metrics report(no NxTrim-ed fastq) for $PREFIX ......"
+./NGS_MatePair_QC.sh $SORT_FILE $PREFIX
+echo "$PREFIX QC report had been done."
+########################################
+#RUN_delly_v0.6.3.sh
+#!/bin/bash
 
+SORTED_BAM_FILE=$1
+#HG19=$2
+#PREFIX=`echo $SORTED_BAM_FILE | sed "s/(.*)\.sorted\.bam$/\1/g"`
+PREFIX=$2
+DEL_VCF=$PREFIX"_delly_v0.6.3_DEL.vcf"
+INV_VCF=$PREFIX"_delly_v0.6.3_INV.vcf"
+DUP_VCF=$PREFIX"_delly_v0.6.3_DUP.vcf"
+TRA_VCF=$PREFIX"_delly_v0.6.3_TRA.vcf"
+#DEL_LOG_FILE=$PREFIX"_delly_v0.6.3_DEL.log"
+#INV_LOG_FILE=$PREFIX"_delly_v0.6.3_INV.log"
+#DUP_LOG_FILE=$PREFIX"_delly_v0.6.3_DUP.log"
+#TRA_LOG_FILE=$PREFIX"_delly_v0.6.3_TRA.log"
+echo "delly calling the deletion ......"
+/home/cdx/genome_tools/delly_v0.6.3_linux_x86_64bit -x hg19.excl -t DEL -o $DEL_VCF -g hg19.fa $SORTED_BAM_FILE
+echo "delly calling the inversion ......"
+#nohup /home/cdx/genome_tools/delly_v0.6.3_linux_x86_64bit -x hg19.excl -t DEL -o $DEL_VCF -g hg19.fa $SORTED_BAM_FILE > $DEL_LOG_FILE 2>&1 &
+/home/cdx/genome_tools/delly_v0.6.3_linux_x86_64bit -x hg19.excl -t INV -o $INV_VCF -g hg19.fa $SORTED_BAM_FILE
+echo "delly calling the duplication ......"
+#nohup /home/cdx/genome_tools/delly_v0.6.3_linux_x86_64bit -x hg19.excl -t INV -o $INV_VCF -g hg19.fa $SORTED_BAM_FILE > $INV_LOG_FILE 2>&1 &
+/home/cdx/genome_tools/delly_v0.6.3_linux_x86_64bit -x hg19.excl -t DUP -o $DUP_VCF -g hg19.fa $SORTED_BAM_FILE
+echo "delly calling the translocation ......"
+#nohup /home/cdx/genome_tools/delly_v0.6.3_linux_x86_64bit -x hg19.excl -t DUP -o $DUP_VCF -g hg19.fa $SORTED_BAM_FILE > $DUP_LOG_FILE 2>&1 &
+/home/cdx/genome_tools/delly_v0.6.3_linux_x86_64bit -x hg19.excl -t TRA -o $TRA_VCF -g hg19.fa $SORTED_BAM_FILE
+#nohup /home/cdx/genome_tools/delly_v0.6.3_linux_x86_64bit -x hg19.excl -t TRA -o $TRA_VCF -g hg19.fa $SORTED_BAM_FILE > $TRA_LOG_FILE 2>&1 &
+echo "delly v0.6.3 called 4 SVTYPE had finished."
+##############################################################
 
+#!/bin/bash
+FASTQ1=$1
+FASTQ2=$2
+#SAM_FILE=`echo $FASTQ1 | sed "s/(.*)//"`
+PREFIX=$3
+SAM_FILE=${PREFIX}".sam"
+BAM_FILE=${PREFIX}".bam"
+DISCORDANT=${PREFIX}".discorants.unsorted.bam"
+SORTED_DIS=${PREFIX}".discordants.bam"
+SPLIT=${PREFIX}."splitters.unsorted.bam"
+SORTED_SPLIT=${PREFIX}".splitters.bam"
+VCF=${PREFIX}".vcf"
+echo "Running bwa mem to align the data ......"
+bwa mem -t 30 -R "@RG\tID:id\tSM:$PREFIX\tLB:lib" hg19 $FASTQ1 $FASTQ2 | samblaster --excludeDups --addMateTags --maxSplitCount 2 --minNonOverlap 20 | samtools view -S -b - > $BAM_FILE
+echo "Extract the discordant paired-end alignments ......"
+samtools view -b -F 1294 $BAM_FILE > $DISCORDANT
+echo "Extract the split-read alignment ......"
+samtools view -h $BAM_FILE | /home/cdx/genome_tools/lumpy-sv/scripts/extractSplitReads_BwaMem -i stdin | samtools view -Sb - > $SPLIT
+echo "Sort both alignments ......"
+samtools sort -@ 10 $DISCORDANT -o $SORTED_DIS
+samtools sort -@ 10 $SPLIT -o $SORTED_SPLIT
+echo "Finished sorting bam!"
+echo "Running LUMPY ......"
+lumpyexpress -B $BAM_FILE -S $SORTED_SPLIT -D $SORTED_DIS -o $VCF
+echo "LUMPY finished!"
+###########################
 
-
-
-
-
-
-
+ggplot(data=Intra234_IDTWES_20_S_Total_POINT,mapping = aes(x=Base,y=Other_COMPUTE))+
+geom_point(aes(color=Overall))+geom_line(aes(color=Overall))+
+labs(title="Intra-Assay Reproducibility, IDTWES-20-S(n=3)",x="Size",y="CONCORDANCE")+
+theme(plot.title=element_text(hjust=0.5))+scale_x_continuous(limits=c(1,30),breaks=c(1,10,20,30))+
+scale_y_continuous(limits=c(0,1),breaks=seq(0,1,0.25))+
+scale_color_manual(name="Overall",labels=c("DEL=0.7854","INS=0.7646","SNP=0.9605"),values=c("blue","red","black"))+
+theme(legend.position=c(0.1,0.13))
+ggplot(data=IDTWES_20_S_NA12878_Total_LoD[IDTWES_20_S_NA12878_Total_LoD$FREQ<=0.90,],aes(x=FREQ,fill=TYPE))+
+geom_density()+labs(title="Density and Distribution of Variant Calls for Mosaic LoD",x="Alt/(Ref+Alt)",y="density")+
+theme(plot.title=element_text(hjust=0.5))+scale_fill_discrete(name="Sample(S)")
 
 
 
