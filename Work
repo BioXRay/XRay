@@ -3146,4 +3146,614 @@ with open(Barcode_File,'r') as F:
     print("G percent: %s" % Records['G'])
     print("T percent: %s" % Records['T'])
 #############################################
+config.yaml:
+conda_bin: /home/li_tuan/anaconda3/bin
+bin: /cold_data/li_tuan/annotation/bin
+workflow_dir: /cold_data/li_tuan/annotation
+Rscript: /home/li_tuan/anaconda3/envs/r_officer/bin/Rscript
+vt: /home/li_tuan/anaconda3/envs/bioinfo/bin/vt
+vep_python: /home/li_tuan/anaconda3/bin/python
+vep_bin: /home/li_tuan/anaconda3/envs/vep100/bin
+vep_data: /cold_data/li_tuan/vep_data/cache_100
+vep_plugin: /cold_data/li_tuan/vep_data/VEP_plugins
+vep_ref: /cold_data/li_tuan/data/hs37d5.fa
+dbnsfp: /cold_data/li_tuan/vep_data/dbNSFP4.0a/dbNSFP_hg19.gz
+dbscsnv: /cold_data/li_tuan/vep_data/dbscSNV/dbscSNV1.1_GRCh37.txt.gz
+clinvar: /cold_data/li_tuan/vep_data/clinvar37/clinvar.vcf.gz
+cosmic:  /cold_data/li_tuan/vep_data/cosmic37/cosmic.vcf.gz
+gene_transcript: /cold_data/li_tuan/lung_report/data/gene_primary_transcript_table.tsv
+intervar_python: /usr/bin/python
+intervar: /home/li_tuan/interpretation/InterVar-master/Intervar.py
+intervar_config: /home/li_tuan/config.ini
+intervar_perl: /usr/bin/perl
+convert2annovar: /home/li_tuan/interpretation/InterVar-master/convert2annovar.pl
+########################################################################################
+
+#annotation.smk
+#!/usr/bin/env python
+
+configfile: "/cold_data/li_tuan/annotation/config.yaml"
+
+from pathlib import Path
+
+files = Path('.').glob('./**/input/*.vcf')
+samples = [f.stem.split('.')[0] for f in files]
+
+
+
+
+rule target:
+    input:
+        expand('result/{sample}.anno.xls', sample=samples)
+
+
+
+rule extract_tumor_vcf:
+    input:
+        'input/{sample}.vcf'
+    output:
+        '{sample}/{sample}.vcf'
+    params:
+        bin = list(Path(config['workflow_dir']).glob('bin'))[0].resolve(),
+    shell:
+        """
+        export PATH={params.bin}:{config[conda_bin]}:$PATH
+
+        extract_tumor_vcf.py {input} {output}
+        """
+
+rule norm:
+    input:
+        '{sample}/{sample}.vcf'
+    output:
+        '{sample}/{sample}.norm.vcf'
+    params:
+        vt = config['vt'],
+        ref = list(Path(config['workflow_dir']).glob('./ref/*fa'))[0].resolve(),
+    shell:
+        """
+        {params.vt} normalize \
+            -r {params.ref} \
+            -o {output} \
+            {input}
+
+        """
+
+
+rule annotation:
+    input:
+        '{sample}/{sample}.norm.vcf'
+    output:
+        '{sample}/{sample}.anno.xls'
+    shell:
+        """
+        {config[vep_python]} {config[bin]}/vep.py \
+            --vep_bin {config[vep_bin]} \
+            --vep_cache {config[vep_data]} \
+            --vep_plugin {config[vep_plugin]} \
+            --ref {config[vep_ref]} \
+            --assembly GRCh37 \
+            --dbnsfp {config[dbnsfp]} \
+            --dbscsnv {config[dbscsnv]} \
+            --clinvar {config[clinvar]} \
+            --cosmic {config[cosmic]} \
+            --gene_transcript {config[gene_transcript]} \
+            --threads 8 \
+            --python {config[intervar_python]} \
+            --intervar {config[intervar]} \
+            --intervar_config {config[intervar_config]} \
+            --perl {config[intervar_perl]} \
+            --convert2annovar {config[convert2annovar]} \
+            --vcf {input} \
+            --out {output}
+
+        """
+
+rule filter_annotation:
+    input:
+        '{sample}/{sample}.anno.xls'
+    output:
+        '{sample}/{sample}.anno.filter.xlsx',
+        'result/{sample}.anno.filter.xlsx',
+        'result/{sample}.anno.xls'
+    params:
+        bin = list(Path(config['workflow_dir']).glob('bin'))[0].resolve(),
+        gene_list = list(Path(config['workflow_dir']).glob('./**/data/gene.list'))[0].resolve(),
+    shell:
+        """
+        export PATH={params.bin}:{config[conda_bin]}:$PATH
+
+        filter_anno.py {input} {params.gene_list} {output[0]}
+
+        cp {output[0]} {output[1]}
+        cp {input} {output[2]}
+        """
+#############################
+#!/usr/bin/env python
+
+import os
+import sys
+import re
+import subprocess
+import uuid
+import gzip
+import pandas as pd
+import numpy as np
+import logging
+logger = logging.getLogger('vep')
+
+from pathlib import Path
+from argparse import ArgumentParser
+
+parser = ArgumentParser(description="use vep to annotate vcf")
+
+parser.add_argument('--vep_bin', dest='vep_bin', action='store', required=True, help='path to vep binary directory')
+parser.add_argument('--vep_cache', dest='vep_cache', action='store', required=True, help='path to vep cache directory')
+parser.add_argument('--vep_plugin', dest='vep_plugin', action='store', required=True, help='path to vep plugin directory')
+parser.add_argument('--ref', dest='ref', action='store', required=True, help='path to human reference(fasta)')
+parser.add_argument('--assembly', dest='assembly', action='store', default='GRCh37', choices=['GRCh38', 'GRCh37'], required=False, help='human reference assembly, GRCh37 or GRCh38')
+parser.add_argument('--dbnsfp', dest='dbnsfp', action='store', required=True, help='path to dbnsfp directory')
+parser.add_argument('--dbscsnv', dest='dbscsnv', action='store', required=True, help='path to dbscSNV file')
+parser.add_argument('--clinvar', dest='clinvar', action='store',required=True, help='path to clinvar vcf')
+parser.add_argument('--cosmic', dest='cosmic', action='store', required=True, help='path to cosmic vcf')
+parser.add_argument('--gene_transcript', dest='gene_transcript', action='store', required=True, help='path to gene primary transcript')
+
+parser.add_argument('--python', dest='python', action='store', required=True, help='path to python(for intervar)')
+parser.add_argument('--intervar', dest='intervar', action='store', required=True, help='path to intervar')
+parser.add_argument('--intervar_config', dest='intervar_config', action='store', required=True, help='path to intervar config')
+
+parser.add_argument('--perl', dest='perl', action='store', required=True, help='path to perl(for convert2annovar)')
+parser.add_argument('--convert2annovar', dest='convert2annovar', action='store', required=True, help='path to convert2annovar')
+
+parser.add_argument('--threads', dest='threads', action='store', type=int, default=8, help='vep threads')
+parser.add_argument('--vcf', dest='vcf', action='store', required=True, help='path to input vcf')
+parser.add_argument('--out', dest='out', action='store', required=True, help='path to output tsv file')
+
+args = parser.parse_args()
+print(args)
+
+def convert_vcf_to_tsv(vcf):
+
+    logger.info('convert vcf to tsv')
+    tmp_tsv = 'tmp' + str(uuid.uuid4()) + '.tsv'
+
+    ldfs = []
+    with open(vcf) as o_f :
+        samples = []
+        for line in o_f:
+            if line[:2] == '##':
+                continue
+            elif line[:6] == '#CHROM':
+                columns = line.rstrip('\n').split('\t')
+                if len(columns) == 8:
+                    samples = ['sample']
+                elif len(columns) == 9:
+                    samples = ['sample'] 
+                elif len(columns) >= 10:
+                    samples = columns[9:]
+            else:
+                words = line.rstrip('\n').split('\t')
+                info = '.'
+                fformat ='.'
+                fformat_v = '.'
+                if len(words) == 8:
+                    info = words[7]
+                    fformat = '.'
+                elif len(words) >= 10:
+                    info = words[7]
+                    fformat = words[8]
+                    fformat_v = words[9:]
+
+                if info == '.':
+                    info_columns = ['info']
+                    info_values = ['.']
+                else:
+                    info_columns = []
+                    info_values = []
+                    for i in info.split(';'):
+                        ii = i.split("=")
+                        info_columns.append('INFO_'+ii[0])
+                        info_values.append('='.join(ii[1:]))
+                
+                if fformat == '.':
+                    format_columns = ['format']
+                    format_values = ['.']
+                else:
+                    format_columns = []
+                    format_values = []
+                    if len(samples) == 1:
+                        format_columns += ['FORMAT_' + i for i in fformat.split(':')]
+                        format_values += fformat_v[0].split(':')
+                    else:
+                        for fi, fv in enumerate(fformat_v):
+                            format_columns += [ 'sample_' + str(fi+1) + '_FORMAT_' + i for i in fformat.split(':')]
+                            format_values += fv.split(':')
+
+
+                print(info_columns)
+                print(format_columns)
+                ldf = pd.DataFrame([words[:7] + info_values + format_values], columns=columns[:7] + info_columns + format_columns)
+                ldfs.append(ldf)
+    df = pd.concat(ldfs, sort=False)
+
+    df.to_csv(tmp_tsv, sep='\t', index=False, encoding='utf-8')
+
+    logger.info('convert vcf to tsv successfully')
+    return tmp_tsv
+
+
+def add_vid(vcf):
+
+    print(vcf)
+    logger.info(f'add vid to vcf {vcf}')
+    tmp_vcf = str('tmp' + str(uuid.uuid4()) + '.vcf')
+    print(tmp_vcf)
+    try:
+        with open(tmp_vcf, 'w') as w_f, open(vcf) as o_f:
+            i = 100000
+            for line in o_f:
+                if line[0] == '#':
+                    print(line, file=w_f, end='')
+                else:
+                    words = line.split('\t')
+                    if words[2] == '.':
+                        new_line = '\t'.join(words[:2] + [str(i)] + words[3:])
+                    else:
+                        new_line = line
+                    print(new_line, file=w_f, end='')
+                    i += 1
+    except Exception as e:
+        print(e)
+        with open(tmp_vcf, 'w') as w_f, gzip.open(vcf, 'rt') as o_f:
+            i = 0
+            for line in o_f:
+                if line[0] == '#':
+                    print(line, file=w_f, end='')
+                else:
+                    words = line.split('\t')
+                    new_line = '\t'.join(words[:2] + [str(i)] + words[3:])
+                    print(new_line, file=w_f, end='')
+                    i += 1
+
+    logger.info('add vid to vcf succesfully')
+    return tmp_vcf
+
+
+def run_vep(vcf):
+
+    logger.info('run vep')
+    tmp_vep_tsv = str('tmp' + str(uuid.uuid4()) + '.vep.tsv')
+
+    dbnspf_columns = ','.join([
+        'Ensembl_geneid',
+        'Ensembl_transcriptid',
+        'Ensembl_proteinid',
+        'FATHMM_pred',
+        'Interpro_domain',
+        'SIFT4G_pred',
+        'PROVEAN_pred',
+        'Polyphen2_HVAR_pred',
+        'LRT_pred',
+        'MutationAssessor_pred',
+        'MutationTaster_pred',
+        'fathmm-MKL_coding_pred',
+        'MetaLR_pred',
+        'MetaSVM_pred',
+        'Polyphen2_HVAR_pred',
+        'M-CAP_pred',
+        'REVEL_score',
+        '1000Gp3_EAS_AF',
+        '1000Gp3_AF',
+        'ESP6500_AA_AF',
+        'ExAC_AF',
+        'ExAC_EAS_AF',
+        'gnomAD_exomes_controls_AF',
+        'gnomAD_exomes_controls_AFR_AF',
+        'gnomAD_exomes_controls_AMR_AF',
+        'gnomAD_exomes_controls_ASJ_AF',
+        'gnomAD_exomes_controls_EAS_AF',
+        'gnomAD_exomes_controls_FIN_AF',
+        'gnomAD_exomes_controls_NFE_AF',
+    ])
+
+    subprocess.run(f"""
+    export PATH={args.vep_bin}:$PATH; \
+    {args.vep_bin}/vep \
+        --cache \
+        --dir_cache {args.vep_cache} \
+        --fasta {args.ref} \
+        --assembly {args.assembly} \
+        --merged \
+        --offline \
+        --everything \
+        --custom {args.clinvar},Clinvar,vcf,exact,0,CLNSIG,CLNREVSTAT,CLNDN \
+        --custom {args.cosmic},COSMIC,vcf,exact,0,CNT,LEGACY_ID \
+        --dir_plugins {args.vep_plugin} \
+        --plugin dbNSFP,{args.dbnsfp},{dbnspf_columns} \
+        --plugin dbscSNV,{args.dbscsnv} \
+        --format vcf \
+        --shift_3prime 1 \
+        -i {vcf} \
+        --tab \
+        -o {tmp_vep_tsv} \
+        --force_overwrite \
+        --fork {args.threads} \
+        --no_stats \
+        --no_escape
+    """, shell=True)
+
+    logger.info('run vep successfully')
+    return tmp_vep_tsv
+
+
+def run_intervar(vcf):
+    logger.info('run interval')
+
+    vcf_name = Path(vcf).stem
+    out_dir = str(Path(args.out).parent)
+    out_file = out_dir + '/' + vcf_name
+
+    tmp_config = str('tmp' + str(uuid.uuid4()) + '.config.ini')
+    with open(args.intervar_config) as o_f, open(tmp_config, 'w') as w_f:
+        for line in o_f:
+            if line.startswith('inputfile ='):
+                print(f'inputfile = {vcf}', file=w_f)
+            elif line.startswith('outfile = '):
+                print(f"outfile = {out_file}", file=w_f)
+            else:
+                print(line, file=w_f, end='')
+
+    subprocess.run(
+        f"""
+        {args.python} {args.intervar} -c {tmp_config} 
+        """, shell=True
+    )
+
+    tmp_avinput = 'tmp' + str(uuid.uuid4()) + '.avinput'
+    subprocess.run(
+        f"""
+        {args.perl} {args.convert2annovar} --format vcf4 --includeinfo {vcf} > {tmp_avinput}
+        """, shell=True
+    )
+
+    adf = pd.read_csv(tmp_avinput, sep='\t', header=None, dtype=str)
+    adf = adf[[0,1,2,3,4,7]]
+    adf.columns = ['#Chr', 'Start', 'End', 'Ref', 'Alt', 'ID']
+
+    files = [str(f.resolve()) for f in Path(out_dir).glob('*.intervar')]
+    files = sorted(files, key=lambda f: os.stat(f).st_mtime)
+    vdf = pd.read_csv(files[0], sep='\t', dtype=str)
+    mdf = pd.merge(vdf, adf, on=['#Chr', 'Start', 'End', 'Ref', 'Alt'])
+    #mdf.to_csv('interval.tsv', sep='\t', index=False)
+    
+    logger.info('run interval successfully')
+    return mdf[['ID', ' InterVar: InterVar and Evidence ']].rename(columns={' InterVar: InterVar and Evidence ':'intervar'})
+
+def main():
+
+    # check if vcf is empty:
+    empty = 1
+    with open(args.vcf) as o_f:
+        for line in o_f:
+            if line[0] == '#':
+                continue
+            else:
+                words = line.strip().split('\t')
+                if len(words) >= 8:
+                    empty = 0
+    if empty:
+        Path(args.out).touch()
+        sys.exit(0)
+
+    vcf1 = add_vid(args.vcf)
+    tsv1 = convert_vcf_to_tsv(vcf1)
+    tsv2 = run_vep(vcf1)
+
+    df1 = pd.read_csv(tsv1, sep='\t', dtype=str)
+
+    keep_columns = ['#CHROM', 'POS', 'ID', 'REF', 'ALT', 'QUAL', 'FILTER'] 
+    for c in df1.columns.tolist():
+        if  'INFO_' in c and 'DP' in c:
+            keep_columns.append(c)
+        if  'INFO_' in c and 'AF' in c:
+            keep_columns.append(c)
+        if  'FORMAT_' in c and 'DP' in c:
+            keep_columns.append(c)
+        #if  'FORMAT_' in c and 'AD' in c:
+        #    keep_columns.append(c)
+        if  'FORMAT_' in c and 'FREQ' in c:
+            keep_columns.append(c)
+        if  'FORMAT_' in c and 'AF' in c:
+            keep_columns.append(c)
+        if  'FORMAT_' in c and 'GT' in c:
+            keep_columns.append(c)
+        if  'FORMAT_' in c and 'CLCAD2' in c:
+            keep_columns.append(c)
+    keep_columns = [ c for c in keep_columns if not 'sample_2_' in c]
+    #print(keep_columns)
+    keep_columns = list(set(keep_columns))
+    df1 = df1[keep_columns]
+    keep_columns = [c if not 'sample_1_' in c else c[9:] for c in keep_columns]
+    df1.columns = keep_columns
+
+    df1['FORMAT_AD'] = df1['FORMAT_CLCAD2'].apply(lambda x: int(x.split(',')[1].strip()) if isinstance(x, str) and ',' in x else 0)
+    #df1['FORMAT_AD'] = df1['FORMAT_AD'].apply(lambda x: float(x.split(',')[1]) if x != '-' and x != '.' else 0)
+    #df1['FORMAT_DP'] = df1['FORMAT_DP'].apply(lambda x: int(x) if x != '-' and x != '.' else 1)
+    #df1['allele_frequency'] = df1['FORMAT_FREQ'].apply(lambda x: float(x[:-1])/100 if x != '-' and x != '.' else 0)
+#    df1['allele_frequency'] = df1['FORMAT_AF']
+    df1['allele_frequency'] = df1['FORMAT_AD'].astype(int) / df1['FORMAT_DP'].astype(int)
+#    df1['allele_frequency'] = df1['allele_frequency'].apply(lambda x: '{0:.2%}'.format(float(x)))
+    #print(df1['FORMAT_FREQ'])
+    #df1['allele_frequency'] = df1['FORMAT_FREQ']
+
+    comment_lines = 0
+    with open(tsv2) as o_f:
+        for line in o_f:
+            if line[:2] == '##':
+                comment_lines += 1
+            else:
+                break
+    df2 = pd.read_csv(tsv2, sep='\t', dtype=str, skiprows=comment_lines)
+    drop_columns = [
+        'FLAGS',
+        'TSL',
+        'APPRIS',
+        'CCDS',
+        'SWISSPROT',
+        'TREMBL',
+        'UNIPARC',
+        'REFSEQ_MATCH',
+        'SOURCE',
+        'GIVEN_REF',
+        'USED_REF',
+        'BAM_EDIT',
+        'SIFT',
+        'PolyPhen',
+        'miRNA',
+        'AF',
+        'PHENO',
+        'MOTIF_NAME',
+        'MOTIF_POS',
+        'HIGH_INF_POS',
+        'MOTIF_SCORE_CHANGE',
+        'DOMAINS',
+        'SYMBOL_SOURCE',
+        'MANE',
+        'GENE_PHENO',
+        'HGVS_OFFSET',
+        'DISTANCE',
+        'AFR_AF',
+        'AMR_AF',
+        'EUR_AF',
+        'SAS_AF',
+        'EA_AF',
+        'gnomAD_AFR_AF',
+        'gnomAD_AMR_AF',
+        'gnomAD_ASJ_AF',
+        'gnomAD_FIN_AF',
+        'gnomAD_NFE_AF',
+        'gnomAD_OTH_AF',
+        'gnomAD_SAS_AF',
+        'cDNA_position',
+        'CDS_position',
+        'Protein_position',
+        'Amino_acids',
+        'Feature_type',
+        'Codons',
+        'Gene',
+    ]
+
+    df2 = df2.drop(columns=drop_columns)
+    df2['HGVSp'] = df2['HGVSp'].apply(lambda x: x.split(':')[1] if ':' in x else x)
+    df2['EXON'] = df2['EXON'].apply(lambda x: x.replace('/', '\/'))
+    df2['INTRON'] = df2['INTRON'].apply(lambda x: x.replace('/', '\/'))
+
+    mdf = pd.merge(df1, df2, left_on='ID', right_on='#Uploaded_variation')
+    mdf = mdf.drop(columns=['#Uploaded_variation'])
+
+    gdf = pd.read_csv(args.gene_transcript, sep='\t')
+    primary_transcript = gdf[gdf['primary'] == 'Y']['nm'].tolist()
+
+    c = mdf['Feature'].str.contains('XM_')
+    mdf = mdf[~c].copy()
+
+    mdf['nm'] = [s.split('.')[0] if s[:2] == 'NM' else s for s in mdf['Feature']]
+    mdf['nm'] = mdf['nm'].astype(str)
+    mdf['score_1'] = np.where(mdf['nm'].isin(primary_transcript), 10, 0)
+    mdf['score_2'] = np.where(mdf['nm'].str.contains('NM_'), 10, 0)
+    mdf['score_3'] = np.where(mdf['CANONICAL'] != '-', 10, 0)
+    mdf = mdf.sort_values(by=['score_1', 'score_2', 'score_3'], ascending=False)
+
+    mdf = mdf.drop(columns=['nm','score_1', 'score_2', 'score_3'])
+    #mdf.to_csv('mdf.tsv', index=False)
+
+    def concat_rows(df):
+        row = df.iloc[0,:].tolist()
+        if len(df) >= 2:
+            hgvsc = ';'.join(df.iloc[1:,:]['HGVSc'].tolist())
+            hgvsp = ';'.join(df.iloc[1:,:]['HGVSp'].tolist())
+            pi = df.columns.tolist().index('HGVSp')
+            new_values = row[:pi+1] + [hgvsc, hgvsp] + row[pi+1:]
+        else:
+            pi = df.columns.tolist().index('HGVSp')
+            new_values = row[:pi+1] + ['-', '-'] + row[pi+1:]
+        return new_values
+
+    m_columns = mdf.columns.tolist()
+    pi = m_columns.index('HGVSp')
+    new_columns = m_columns[:pi+1] + ['HGVSc_other', 'HGVSp_other'] + m_columns[pi+1:]
+
+    nr = mdf.groupby('ID').apply(concat_rows)
+    ndf = pd.DataFrame(nr.tolist(), columns=new_columns)
+
+    ndf = ndf.rename(columns={'Feature':'primary_transcript', 'Gene':'entrez', '#CHROM':'CHROM'})
+    #ndf.to_csv('ndf1.xls', index=False, sep='\t')
+
+    for c in ndf.columns.tolist():
+        if '_AF' in c:
+            pass
+            #ndf[c] = ndf[c].apply(lambda x: float(x) if x != '-' and x.isnumeric() else 0)
+            #ndf = ndf[ndf[c] < 0.05]
+            #ndf[c] = ndf[c].apply(lambda x: x if x > 0 else '-')
+
+    n_columns = ndf.columns.tolist()
+    i1 = n_columns.index('Consequence')
+    i2 = n_columns.index('HGVSc')
+    i3 = n_columns.index('HGVSp')
+    i4 = n_columns.index('HGVSc_other')
+    i5 = n_columns.index('HGVSp_other')
+    nn_columns = n_columns[:i1+1] + ['HGVSc', 'HGVSp', 'HGVSc_other', 'HGVSp_other'] + n_columns[i1+1:i2] + n_columns[i2+1:i3] + n_columns[i3+1:i4] + n_columns[i4+1:i5] + n_columns[i5+1:]
+    ndf = ndf[nn_columns]
+
+    idf = run_intervar(vcf1)
+    #idf.to_csv('intervar1.tsv', index=False, sep='\t')
+
+    ndf = pd.merge(ndf, idf, on='ID', how='left')
+
+
+    def translate_hgvsp(hgvsp):
+        ad = {'Cys': 'C', 'Asp': 'D', 'Ser': 'S', 'Gln': 'Q', 'Lys': 'K',
+        'Ile': 'I', 'Pro': 'P', 'Thr': 'T', 'Phe': 'F', 'Asn': 'N', 
+        'Gly': 'G', 'His': 'H', 'Leu': 'L', 'Arg': 'R', 'Trp': 'W', 
+        'Ala': 'A', 'Val':'V', 'Glu': 'E', 'Tyr': 'Y', 'Met': 'M', 'X':'*', 'Ter':'*'}
+
+        for k,v in ad.items():
+            hgvsp = re.sub(k, v, hgvsp)
+
+        if 'p.' in hgvsp:
+            return hgvsp[2:]
+        else:
+            return hgvsp   
+
+    ndf['hgvsp'] = ndf['HGVSp'].apply(translate_hgvsp)
+
+    nn_columns = ndf.columns.tolist()
+    columns = [
+    'CHROM', 'POS', 'REF', 'ALT', 'SYMBOL', 'Location', 'Allele', 'allele_frequency', 'FORMAT_DP', 'FORMAT_AD','primary_transcript', 'HGVSc', 'HGVSp', 'hgvsp', 'Consequence', 'VARIANT_CLASS', 'EXON', 'INTRON',
+    'Existing_variation', 'IMPACT', 'Clinvar_CLNSIG', 'COSMIC', 'COSMIC_CNT', 'COSMIC_LEGACY_ID', 'ada_score', 'rf_score', 'intervar', 'FORMAT_GT', 'HGVSc_other', 'HGVSp_other', 'PUBMED',
+    'EAS_AF', 'AA_AF', 'gnomAD_AF', 'gnomAD_EAS_AF', 'MAX_AF', 'MAX_AF_POPS', '1000Gp3_AF', '1000Gp3_EAS_AF', 'ESP6500_AA_AF', 'ExAC_AF', 'ExAC_EAS_AF',
+    'Interpro_domain',  'FATHMM_pred', 'LRT_pred', 'M-CAP_pred', 'MetaLR_pred', 'MetaSVM_pred', 'MutationAssessor_pred',
+    'MutationTaster_pred', 'PROVEAN_pred', 'Polyphen2_HVAR_pred', 'REVEL_score', 'SIFT4G_pred', 'fathmm-MKL_coding_pred',
+    'QUAL', 'STRAND',
+    'Clinvar','Clinvar_CLNREVSTAT', 'clinvar_CLNDN', 'Ensembl_geneid', 'Ensembl_proteinid', 'Ensembl_transcriptid',
+    ]
+
+    primary_columns = [c for c in columns if c in nn_columns]
+    rest_columns = [c for c in nn_columns if not c in columns]
+
+    ndf = ndf[primary_columns + rest_columns]
+    ndf['HGVSc'] = ndf['HGVSc'].apply(lambda x: x.split(':')[1] if isinstance(x, str) and ':' in x else x)
+
+
+    ndf.to_csv(args.out, sep='\t', index=False)
+    logger.info(f'write output {args.out}')
+
+    #Path(vcf1).unlink()
+    #Path(tsv1).unlink()
+    #Path(tsv2).unlink()
+
+
+
+if __name__ == "__main__":
+    main()
 
