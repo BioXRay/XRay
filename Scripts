@@ -178,10 +178,10 @@ print "$&\n";
 print "$a\n";
 
 
-#
+#getFusionResults.pl
 ##############################################################################################################
 #                                                                                                            #
-#       LUNGR (RNA Fusion Panel for Lung Cancer), Auto Reporting Pipline, written by Bo Wang at WXDX         #
+#       LUNGR (RNA Fusion Panel for Lung Cancer), Auto Reporting Pipline, written by Bo Wang                 #
 #                                                                                                            #
 ###Initialization#############################################################################################
 
