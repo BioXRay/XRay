@@ -1,0 +1,171 @@
+###This python script is searching the enzyme cutting position according to the bed region.(Enzyme sequence will be change by the user)
+###Created by: XRay(Xie Guanglei)
+###Date:2020/12/15
+###Methylation sequence(C-->T) bisulfite conversion according the URL(https://blog.csdn.net/qq_29300341/article/details/53302961)
+
+###Input parameter: the bed file following as:
+###Panel_Region_Info.bed
+#chr1    933461  933661  colorectal_cancer_hyper_rrbs_235_F_2
+#chr1    960158  960358  CRC_stomach_extra_48.stomach_amf_hypo_67_R_2
+#chr1    1098990 1099190 Demethylation1_F_1
+
+#!/usr/bin/python
+#-*- coding:UTF-8 -*-
+
+import pysam
+import re
+import sys
+
+def ExtractSeq(Chr,pos,end):
+        HG19_FILE="/data/home/minjiexu/Genome/hg19/hg19_LAM.fa"
+        HG19_FA=pysam.Fastafile(HG19_FILE)
+        tmp_seq=HG19_FA.fetch(Chr,pos,end)
+        return(tmp_seq)
+
+def ReverseComp(seq):
+    reverse_seq=seq[::-1]
+    tran_ref={"A":"T","T":"A","G":"C","C":"G","g":"C","c":"G","a":"T","t":"A"} #str.maketrans("ACTG","TGAC") environment python3
+    seq_list=list(reverse_seq)
+    new_seq_list=[tran_ref[i] for i in seq_list]
+    complement_seq="".join(new_seq_list)
+    return(complement_seq)
+
+def Finder_Enzyme(Enzyme,Search_Seq,Base_Pos):
+    Enzyme_Finder=re.finditer(Enzyme,Search_Seq)
+    Enzyme_Position=[]
+    Enzyme_Match_Times=0
+    for eni in Enzyme_Finder:
+        Enzyme_Span=eni.span()
+        #print(Enzyme_Span)
+        Enzyme_Pos=Base_Pos+int(Enzyme_Span[0])+1
+        #print(Enzyme_Pos)
+        Enzyme_Position.append(str(Enzyme_Pos))
+        Enzyme_Match_Times+=1
+    if(len(Enzyme_Position)>=1):
+        Enzyme_Out=";".join(Enzyme_Position)
+    else:
+        Enzyme_Out=""
+    return(Enzyme_Out+"\t"+str(Enzyme_Match_Times))
+
+def Enzyme_Pos_Search(search_seq,Base_Pos):
+    Enzyme_Bst="CTGAG"
+    Enzyme_Bsp="CTTCTCG"
+
+    tmp_out="" #[]
+    Bst_OUT=Finder_Enzyme(Enzyme_Bst,search_seq,Base_Pos)
+    Bsp_OUT=Finder_Enzyme(Enzyme_Bsp,search_seq,Base_Pos)
+
+    """
+    Bst_Finder=re.finditer(Enzyme_Bst,Search_Seq)
+    Bst_Position=[]
+    Bst_Match_Times=0
+    for Bsti in Bst_Finder:
+        Bst_Span=Bsti.span()
+        #print(Bst_Span)
+        Bst_Pos=int(INFO[1])+int(Bst_Span[0])+1
+        #print(Bst_Pos)
+        Bst_Position.append(str(Bst_Pos))
+        Bst_Match_Times+=1
+    if(len(Bst_Position)>=1):
+        Bst_Out=";".join(Bst_Position)
+    else:
+        Bst_Out=""
+    #print("%s\t%s" % (Bst_Out,Bst_Match_Times))
+    #tmp_out.append(Bst_Out)
+    #tmp_out.append(str(Bst_Match_Times))
+    #print("Bsp")
+    Bsp_Finder=re.finditer(Enzyme_Bsp,Search_Seq)
+    Bsp_Position=[]
+    Bsp_Match_Times=0
+    for Bspi in Bsp_Finder:
+        Bsp_Span=Bspi.span()
+        #print(Bsp_Span)
+        Bsp_Pos=int(INFO[1])+int(Bsp_Span[0])+1
+        #print(Bsp_Pos)
+        Bsp_Position.append(str(Bsp_Pos))
+        Bsp_Match_Times+=1
+    if(len(Bsp_Position)>=1):
+        Bsp_Out=";".join(Bsp_Position)
+    else:
+        Bsp_Out=""
+    """
+    return(Bst_OUT+"\t"+Bsp_OUT)
+
+def Seq_Bisulfite_Coversion(Seq):
+    Bisulfite_Con_REF={'C':'T','c':'T','G':'G','A':'A','T':'T','g':'G','a':'A','t':'T'}
+    Con_Seq_List=list(Seq)
+    TMP_Result_LIST=[Bisulfite_Con_REF[base] for base in Con_Seq_List]
+    Result_Seq="".join(TMP_Result_LIST)
+    return(Result_Seq)
+
+#print("Chr\tPos\tEnd\tPrimer Name\tEnzyme Bst Position(+)\tBst Counts(+)\tEnzyme Bsp Position(+)\tBsp Counts(+)\tBst Position(-)\tBst Counts(-)\tBsp Position(-)\tBsp Counts(-)")
+print("Chr\tPos\tEnd\tPrimer Name\tEnzyme Bst Position(+ OT)\tBst Counts(+ OT)\tEnzyme Bsp Position(+ OT)\tBsp Counts(+ OT)\tBst Position(- OB)\tBst Counts(- OB)\tBsp Position(- OB)\tBsp Counts(- OB)\tEnzym
+
+with open(sys.argv[1],'r') as BED:
+        for bed in BED:
+                bed=bed.strip("\r\n")
+                INFO=bed.split("\t")
+                OUT=[]
+                OUT.append(INFO[0])
+                OUT.append(INFO[1])
+                OUT.append(INFO[2])
+                OUT.append(INFO[3])
+                POS=int(INFO[1])
+                END=int(INFO[2])
+                Search_Seq_Pos=ExtractSeq(INFO[0],POS,END)
+                Search_Seq_Neg=ReverseComp(Search_Seq_Pos)
+
+                Pos_Out=Enzyme_Pos_Search(Search_Seq_Pos,int(INFO[1])) #OT strand
+                Neg_Out=Enzyme_Pos_Search(Search_Seq_Neg,int(INFO[1])) #OB strand
+
+                """
+                #Bst_Info=re.search(Enzyme_Bst,Search_Seq).span() # uniq match(Only one times)
+                #Bst_Pos=int(INFO[1])+int(Bst_Info[0])+1
+                Bst_Finder=re.finditer(Enzyme_Bst,Search_Seq)
+                Bst_Position=[]
+                Bst_Match_Times=0
+                #print("Bst")
+                for Bsti in Bst_Finder:
+                        Bst_Span=Bsti.span()
+                        #print(Bst_Span)
+                        Bst_Pos=int(INFO[1])+int(Bst_Span[0])+1
+                        #print(Bst_Pos)
+                        Bst_Position.append(str(Bst_Pos))
+                        Bst_Match_Times+=1
+                if(len(Bst_Position)>=1):
+                    Bst_Out=";".join(Bst_Position)
+                else:
+                    Bst_Out=""
+                #print("%s\t%s" % (Bst_Out,Bst_Match_Times))
+                OUT.append(Bst_Out)
+                OUT.append(str(Bst_Match_Times))
+                #print("Bsp")
+                Bsp_Finder=re.finditer(Enzyme_Bsp,Search_Seq)
+                Bsp_Position=[]
+                Bsp_Match_Times=0
+                for Bspi in Bsp_Finder:
+                        Bsp_Span=Bspi.span()
+                        #print(Bsp_Span)
+                        Bsp_Pos=int(INFO[1])+int(Bsp_Span[0])+1
+                        #print(Bsp_Pos)
+                        Bsp_Position.append(str(Bsp_Pos))
+                        Bsp_Match_Times+=1
+                if(len(Bsp_Position)>=1):
+                    Bsp_Out=";".join(Bsp_Position)
+                else:
+                    Bsp_Out=""
+                #print("%s\t%s" % (Bsp_Out,Bsp_Match_Times))
+                """
+                OUT.append(Pos_Out)
+                OUT.append(Neg_Out)
+
+                CTOT_Pos_Out=Enzyme_Pos_Search(Seq_Bisulfite_Coversion(Search_Seq_Pos),int(INFO[1])) # OT bisulfite conversion sequence:CTOT strand
+                CTOB_Neg_Out=Enzyme_Pos_Search(Seq_Bisulfite_Coversion(Search_Seq_Neg),int(INFO[1])) # OB bisulfite conversion sequence:CTOB strand
+                OUT.append(CTOT_Pos_Out)
+                OUT.append(CTOB_Neg_Out)
+                #print(OUT)
+                #OUT_INFO=INFO[0]+'\t'+INFO[1]+'\t'+INFO[2]+'\t'+INFO[3]+'\t'+Bst_Out+"\t"+str(Bst_Match_Times)+"\t"+Bsp_Out+"\t"+str(Bsp_Match_Times)
+                print("\t".join(OUT))
+                #print("%s\t%s\t%s\t%s\t%s" % (INFO[0],INFO[1],INFO[2],INFO[3],OUT_INFO))
+                #print("%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s" % (INFO[0],INFO[1],INFO[2],INFO[3],Bst_Out,Bst_Match_Times,Bsp_Out,Bsp_Match_Times))
+
