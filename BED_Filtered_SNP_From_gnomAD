@@ -1,0 +1,46 @@
+##This script filters the SNPs/Indels variants from the gnomAD file(hg19_gnomad211_genome.txt---30G) 
+##downloaded by the annovar(http://www.openbioinformatics.org/annovar/download/hg19_gnomad211_genome.txt.gz)
+
+#Main programma(Main.sh that calls the perl script---Single_BED_Info_Filter.pl)
+##Main.sh
+
+#!/usr/bin/bash
+
+cat Primer_Region_Info.txt | while read line;
+do
+        #echo $line
+        perl Single_BED_Info_Filter.pl hg19_gnomad211_genome.txt $line >> My_Primer_Final.txt
+done
+
+#################################
+##Single_BED_Info_Filter.pl
+
+#!/usr/bin/perl
+#-*- coding:UTF-8 -*-
+
+open GNOMAD,"<$ARGV[0]";
+
+#my $BED_Region="7:55259558-55259583:AGGAGGCAAAGTAAGGAGGTGGCTTT";
+my $BED_Region=$ARGV[1];
+@B_TMP=split(":",$BED_Region);
+$B_CHR=$B_TMP[0];
+@B_REGION=split("-",$B_TMP[1]);
+$PRIMER_SEQ=$B_TMP[2];
+while(<GNOMAD>){
+        chomp;
+        $GLine=$_;
+        if($GLine=~m/^#/){
+                @H_TMP=split("\t",$GLine);
+                print "Chr\tPos\tEnd\tPrimer_Seq\t$H_TMP[0]\t$H_TMP[1]\t$H_TMP[3]\t$H_TMP[4]\t$H_TMP[5]\t$H_TMP[6]\t$H_TMP[13]\n";
+                next;
+        }
+        else{
+                @G_TMP=split("\t",$GLine);
+                if($G_TMP[0]==$B_CHR){
+                        if($B_REGION[0]<=$G_TMP[1] && $G_TMP[1]<=$B_REGION[1]){
+                                print "$B_CHR\t$B_REGION[0]\t$B_REGION[1]\t$PRIMER_SEQ\t$G_TMP[0]\t$G_TMP[1]\t$G_TMP[3]\t$G_TMP[4]\t$G_TMP[5]\t$G_TMP[6]\t$G_TMP[13]\n";
+                        }
+                }
+        }
+}
+close(GNOMAD);
