@@ -29,9 +29,7 @@ length(split(gene_data[,1],gene_data[,2]))
 immune_list<-split(gene_data[,1],gene_data[,2])
 
 ################################################
-
 https://docs.gdc.cancer.gov/Data/Bioinformatics_Pipelines/DNA_Seq_Variant_Calling_Pipeline/
-
 
 https://shirley-wbw.github.io/post/gatk4-shi-xian-xun-zhao-snp-ji-lu/
 
@@ -39,9 +37,7 @@ https://docs.gdc.cancer.gov/Data_Dictionary/viewer/#?view=table-definition-view&
 
 https://www.bioinfo-scrounger.com/archives/666/
 
-
 https://wemp.app/posts/e884a8d9-938e-433b-ba77-bdacf8485867
-
 
 https://pzweuj.github.io/2018/03/26/GATK-bp-somatic.html
 
@@ -56,3 +52,36 @@ https://academic.oup.com/bib/advance-article-abstract/doi/10.1093/bib/bbaa148/58
 https://www.ebi.ac.uk/sites/ebi.ac.uk/files/content.ebi.ac.uk/materials/2014/140217_AgriOmics/dan_bolser_snp_calling.pdf
 https://www.biostars.org/p/383162/
 https://github.com/icbi-lab/immunedeconv
+##################################################################################################################################
+
+#Ploting the bar/histogram by the P-value(Example: GO enrichment visualization)
+library(ggplot2)
+library(dplyr)
+
+set.seed(2021)
+GO_NUM<-15
+Enrich_GO_Data<-data.frame(GO_Term=paste0(sample(c('GO_BP','GO_CC','GO_MF'),
+                                                 size=GO_NUM,replace = TRUE),1:GO_NUM),
+                           pval=runif(GO_NUM,0,0.05),DEG=sample(c('up','down'),GO_NUM,replace = TRUE))
+Enrich_GO_Data<-Enrich_GO_Data %>% dplyr::mutate(Pvalue=ifelse(DEG=='up',-log10(pval),log10(pval))) %>% dplyr::arrange(DEG,Pvalue)
+Enrich_GO_Data$GO_Term<-factor(Enrich_GO_Data$GO_Term,levels=unique(Enrich_GO_Data$GO_Term),ordered=TRUE)
+
+#modified the breaks and axis labels(x or y axis)
+log10_breaks<-with(Enrich_GO_Data,labeling::extended(range(Pvalue)[1],range(Pvalue)[2],m=5))
+log10_limit<-range(log10_breaks)
+
+#Plot Example 1
+x11()
+ggplot(data=Enrich_GO_Data,mapping=aes(x=GO_Term,y=Pvalue))+geom_segment(aes(x=GO_Term,xend=GO_Term,y=0,yend=Pvalue,color=DEG),size=5,alpha=0.9)+
+  theme_light()+theme(panel.border=element_blank())+xlab("")+ylab("-log10(Pvalue)")+
+  scale_y_continuous(breaks=log10_breaks,labels=abs(log10_breaks))+coord_flip()
+
+#Plot Example 2
+x11()
+ggplot(data=Enrich_GO_Data,mapping = aes(x=GO_Term,y=Pvalue))+
+  geom_bar(stat='identity',aes(fill=DEG),width=0.8)+xlab("")+
+  ylab("-log10(Pvalue)")+theme_light()+scale_y_continuous(breaks=log10_breaks,labels=abs(log10_breaks))+
+  theme(legend.position = 'none',panel.border = element_blank())+coord_flip()
+###############################################################################################  
+https://www.jianshu.com/p/667f280b9246
+
