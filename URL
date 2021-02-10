@@ -36,3 +36,104 @@ https://github.com/tankle/EM/blob/master/EM.py
 http://dx.doi.org/10.1214/12-AOAS539SUPP
 
 https://www.medrxiv.org/content/10.1101/2020.07.22.20159434v1.full.pdf
+#############################################################################################
+
+#2021.02
+https://zhuanlan.zhihu.com/p/45094576
+https://www.zhihu.com/question/290262821
+https://blog.csdn.net/qq_41551450/article/details/93486438
+https://docs.dockstore.org/en/develop/getting-started/getting-started-with-wdl.html
+https://blog.csdn.net/theomarker/article/details/79627804
+https://www.jianshu.com/p/01c22a137db0
+https://mp.weixin.qq.com/s?__biz=MzIwODA1MzI4Mg==&mid=2456010104&idx=1&sn=207806c40e2dda9a335e0add87c3e6b9&chksm=809fe835b7e861233e83c41584d39095d092b60379b9563a53ad83c3080e72b4299436b7e127&scene=21#wechat_redirect
+https://www.cnblogs.com/nkwy2012/p/7502467.html
+https://www.jianshu.com/p/5d7e550abc1a
+https://reproducibility.sschmeier.com/snakemake/index.html
+https://pmbio.org/module-02-inputs/0002/05/01/Data/
+http://genomedata.org/pmbio-workshop/results/all/somatic/manta_wgs/results/variants/
+https://bioinformatics.stackexchange.com/questions/4111/is-there-a-publicly-available-tumor-normal-sample
+https://www.nature.com/articles/sdata201610
+https://blog.dnanexus.com/2018-09-13-investigating-differences-between-simulated-real-fastq-data/
+https://www.nvidia.com/en-us/docs/parabricks/somatic/
+https://europepmc.org/article/MED/30453880#CR16
+https://www.nature.com/articles/s42003-020-01460-9#data-availability
+https://ftp-trace.ncbi.nlm.nih.gov/1000genomes/ftp/phase3/data/HG00096/sequence_read/
+https://www.nygenome.org/bioinformatics/wp-content/uploads/2019/06/SomaticPipeline_v6.0_Human_WGS.pdf
+SVEngine
+https://www.ncbi.nlm.nih.gov/pmc/articles/PMC4856034/
+https://bcbio-nextgen.readthedocs.io/en/latest/contents/somatic_variants.html
+sample id	base URL	filename mask	libraries
+NA12878	ftp://ftp-trace.ncbi.nih.gov/1000genomes/ftp/technical/working/20120117_ceu_trio_b37_decoy/	CEUTrio.HiSeq.WGS.jaffe.b37_decoy.NA12878.*.clean.dedup.recal.20120117.bam	Solexa-18483,Solexa-18484,Solexa-23661
+NA12981	ftp://ftp-trace.ncbi.nih.gov/1000genomes/ftp/technical/working/20120117_ceu_trio_b37_decoy/	CEUTrio.HiSeq.WGS.b37_decoy.NA12891.clean.dedup.recal.20120117.bam	<all libraries>
+##########################
+library(ggplot2)
+library(reshape2)
+library(stringr)
+
+rrbs_file<-file.path('.','rrbs_lambda_conv_cal_all.txt')
+rrbs_lambda_conv_data<-read.table(rrbs_file,row.names=1,fill=TRUE)
+rownames(rrbs_lambda_conv_data)<-gsub("-D01-L01-M","",rownames(rrbs_lambda_conv_data))
+rrbs_lambda_conv_data_sorted<-rrbs_lambda_conv_data[sort(rownames(rrbs_lambda_conv_data)),]
+
+rrbs_lambda_conv_data_sorted_filtered<-rrbs_lambda_conv_data_sorted[!nchar(rownames(rrbs_lambda_conv_data_sorted))<3,]
+rrbs_lambda_conv_data_sorted_filtered[rrbs_lambda_conv_data_sorted_filtered==0 | is.na(rrbs_lambda_conv_data_sorted_filtered)]<-1
+
+colnames(rrbs_lambda_conv_data_sorted_filtered)<-c("Converted_CpG","Unconverted_CpG","Converted_CHH","Unconverted_CHH","Converted_CHG","Unconverted_CHG")
+rrbs_lambda_conv_data_sorted_filtered<-rrbs_lambda_conv_data_sorted_filtered[,c(1,3,5,2,4,6)]
+
+rrbs_lambda_conv_data_sorted_filtered$"ID"<-rownames(rrbs_lambda_conv_data_sorted_filtered)
+
+rrbs_lambda_conv_dfm<-melt(rrbs_lambda_conv_data_sorted_filtered,id.vars = 'ID')
+
+##plotting
+plot_dfm<-ggplot(data=rrbs_lambda_conv_dfm,mapping=aes(x=ID,y=value))+geom_bar(aes(fill=variable),stat='identity',position='dodge')+scale_y_log10()+theme(axis.text.x=element_text(angle=90,hjust=1))
+plot_dfm<-plot_dfm+ggtitle("Lambda QC")+theme(plot.title = element_text(hjust = 0.5))
+
+ggsave(plot_dfm,filename = file.path('.','Lambda_QC.png'))
+
+###############
+
+Meth_Variables<-as.character(rrbs_lambda_conv_dfm$variable)
+Meth_Types<-substr(Meth_Variables,nchar(Meth_Variables)-2,nchar(Meth_Variables))
+
+rrbs_lambda_conv_dfm$'Content'<-Meth_Types
+
+
+
+
+################
+
+
+#############
+#ploting the Insertion length
+library(parallel)
+library(tools)
+
+setwd(".")
+samples<-dir('.',pattern = ".*-.*")
+core<-length(samples)
+
+withGlobals<-function(FUN, ...){environment(FUN)<-list2env(list(...));FUN}
+
+plotInsert<-function(i){
+  library(ggplot2)
+  library(tools)
+  input<-file.path('.',i,paste(i,"_insert_length_e.txt",sep=""))
+  Insert_File<-read.table(input,header=FALSE,stringsAsFactors = FALSE)
+  colnames(Insert_File)<-"insert_length"
+  pltInsert<-ggplot(data=Insert_File,mapping = aes(x=insert_length))+geom_histogram(binwidth = 10,colour="black",fill="#2E67A0")+xlab(paste("insert length (bp) of",i,sep=" "))
+  #print(file.path('.',i,paste()))  
+  ggsave(pltInsert,filename=file.path('.',i,paste(i,"insert_size_dist.png",sep="_")),width=8,height=5,dpi=300)
+}
+
+cl<-parallel::makeCluster(core)
+anno_log<-parallel::parLapply(cl,samples,withGlobals(plotInsert))
+parallel::stopCluster(cl)
+##################################
+
+###########
+#ploting the MspI site 
+########################################
+
+
+
