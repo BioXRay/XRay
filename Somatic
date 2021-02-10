@@ -1,0 +1,232 @@
+#config.yaml:
+#sample(tumor and normal) information including the name, path of the fastq and so on.
+tsv: "samplelist.tsv"
+
+#genome fasta
+genome: "/data/home/guangleixie/Genome/genome.fasta"
+
+#vcf files
+AF_gnomadVCF: "/data/home/guangleixie/database/af-only-gnomad.raw.sites.b37.vcf.gz"
+HighConf_VCF: "/data/home/guangleixie/database/1000G_phase1.snps.high_confidence.b37.vcf.gz"
+Mills_VCF: "/data/home/guangleixie/database/Mills_and_1000G_gold_standard.indels.b37.vcf.gz"
+
+#tools
+gatk: "/data/home/guangleixie/Tools/gatk-4.1.9.0/gatk"
+vardict: "/data/home/guangleixie/Tools/VarDict-1.8.2"
+AF_THR: "0.01"
+###########################################################################################
+
+#samplelist.tsv:
+Tsample	TR1	TR2	Nsample	NR1	NR2
+Tumorxx /xx/xx_1.fastq.gz /xx/xx_2.fastq.gz Normalxx  /xx/xx_1.fastq.gz /xx/xx_2.fastq.gz
+
+##################################
+
+#Lab.smk:
+configfile: "config.yaml"
+
+import os
+import pandas as pd
+
+#samples=['Normal-C','Tumor-C']
+#df=pd.read_csv(config['tsv'],sep='\t')
+
+#Tumor=df['Tsample'].tolist()
+#Normal=df['Nsample'].tolist()
+#TN_DICT=dict(zip(Tumor,Normal))
+#samples=list(set(Tumor).union(Normal))
+#print(df.columns)
+
+#wildcard_constraints:
+#	sample="[0-9A-Za-z-]"		
+
+def GetFq(sample):
+	print(sample)
+	if(sample in Tumor):
+		r1=df.loc[df['Tsample'].str.contains(sample),'TR1'].to_list()
+		r2=df.loc[df['Tsample'].str.contains(sample),'TR2'].to_list()
+		return({'r1':r1,'r2':r2})
+	elif(sample in Normal):
+		r1=df.loc[df['Nsample'].str.contains(sample),'NR1'].to_list()
+		r2=df.loc[df['Nsample'].str.contains(sample),'NR2'].to_list()
+		return({'r1':r1,'r2':r2})
+
+#rule all:
+#	input:
+#		expand("Align/{sample}.sorted.markdup.bqsr.bam",sample=samples)
+
+rule TrimFQ:
+	input:
+		#R1="samples/{sample}_R1.fastq.gz".format(sample=samples),
+		#R2="samples/{sample}_R2.fastq.gz".format(sample=samples),
+		unpack(lambda wildcards: GetFq(wildcards.sample))
+			
+	output:	
+		r1="Trim/{sample}_R1_val_1.fq.gz",
+		r2="Trim/{sample}_R2_val_2.fq.gz"
+	params:
+		cutadapt="/data/home/guangleixie/miniconda3/envs/bio/bin/cutadapt"
+	shell:
+		"/data/home/guangleixie/miniconda3/envs/bio/bin/trim_galore --paired -q 20 --phred33 --stringency 3 --length 20 --path_to_cutadapt {params.cutadapt} -o Trim {input.r1} {input.r2}"
+
+rule bwaAlign:
+	input:
+		R1="Trim/{sample}_R1_val_1.fq.gz",
+		R2="Trim/{sample}_R2_val_2.fq.gz"
+	output:
+		"Align/{sample}.sam"
+	params:
+		RG="@RG\tID:{sample}\tSM:{sample}\tLB:{sample}\tPL:ILLUMINA",
+		fa="/data/home/guangleixie/Genome/genome.fasta"
+	shell:
+		"""
+		bwa mem -R '{params.RG}' -t 8 {params.fa} {input.R1} {input.R2} > {output}
+		"""
+
+rule SortBam:
+        input:
+                "Align/{sample}.sam"
+        output:
+                bam="Align/{sample}.sorted.bam"
+        shell:
+                """
+                /data/home/guangleixie/Tools/gatk-4.1.9.0/gatk SortSam -I {input} -O {output.bam} -SO coordinate
+		#samtools sort {input} -f {output}
+                """
+
+rule MarkDup:
+	input:
+		"Align/{sample}.sorted.bam"
+	output:
+		bam="Align/{sample}.sorted.markdup.bam",
+		metrics="Align/{sample}.markdup.metrics.txt"
+	shell:
+		"/data/home/guangleixie/Tools/gatk-4.1.9.0/gatk MarkDuplicates -I {input} -O {output.bam} -M {output.metrics} --REMOVE_DUPLICATES false"
+
+rule Index:
+	input:
+		"Align/{sample}.sorted.markdup.bam"
+	output:
+		"Align/{sample}.sorted.markdup.bam.bai"
+	shell:
+		"/data/home/guangleixie/Tools/gatk-4.1.9.0/gatk BuildBamIndex -I {output.bam}"
+
+rule BaseRecalibrator:
+	input:
+		bam="Align/{sample}.sorted.markdup.bam",
+		fa="/data/home/guangleixie/Genome/genome.fasta",
+		hapmap="/data/home/guangleixie/database/hapmap_3.3.b37.vcf.gz",
+		omni1k="/data/home/guangleixie/database/1000G_omni2.5.b37.vcf.gz",
+		dbsnp="/data/home/guangleixie/database/1000G_phase1.snps.high_confidence.b37.vcf.gz",
+		mills="/data/home/guangleixie/database/Mills_and_1000G_gold_standard.indels.b37.vcf.gz"
+	output:
+		"Align/{sample}.bqsr.table"
+	shell:
+		"/data/home/guangleixie/Tools/gatk-4.1.9.0/gatk BaseRecalibrator -R {input.fa} -I {input.bam} --known-sites {input.dbsnp} --known-sites {input.mills} -O {output}"
+		#--use-original-qualities --known-sites hapmap omni1k
+
+rule ApplyBQSR:
+	input:
+		fa="/data/home/guangleixie/Genome/genome.fasta",
+		bam="Align/{sample}.sorted.markdup.bam",
+		table="Align/{sample}.bqsr.table"
+	output:
+		"Align/{sample}.sorted.markdup.bqsr.bam"
+	shell:
+		"/data/home/guangleixie/Tools/gatk-4.1.9.0/gatk ApplyBQSR -R {input.fa} -I {input.bam} --bqsr-recal-file {input.table} -O {output}"
+
+###############################################################################################################
+#TN_Main.smk:
+configfile: "config.yaml"
+import os
+import pandas as pd
+
+#samples=['Normal-C','Tumor-C']
+df=pd.read_csv(config['tsv'],sep='\t')
+
+Tumor=df['Tsample'].tolist()
+Normal=df['Nsample'].tolist()
+#print(Tumor)
+#print(Normal)
+TN_DICT=dict(zip(Tumor,Normal))
+samples=list(set(Tumor).union(Normal))
+#print(samples)
+#print(TN_DICT)
+#print(zip(Tumor,Normal))
+#for (tumor,normal) in zip(Tumor,Normal):
+#	print("####")
+#	print(tumor,"\t",normal)
+#wildcard_constraints:
+#	tumor='|'.join([x for x in Tumor])
+
+#include: "/data/home/guangleixie/LAB/somatic/Lab.smk"
+
+#def get_pair_bam(sample):
+#	if(sample in Tumor):
+#		tumor="Align/{tumor}.sorted.markdup.bam".format(tumor=sample)
+#	else:
+#		normal="Align/{normal}.sorted.markdup.bam".format(normal=TN_DICT[sample])
+#	result={"tumor":tumor,'normal':normal}
+	#print(result)
+#	return(result)
+#print(Tumor[0])
+#test=get_pair_bam(Tumor[0])
+#print(test)
+#wildcard_constraints:
+#       sample="[0-9A-Za-z-]"
+
+rule all:
+	input:
+		#["call/{}.{}.paired.txt".format(tumor,normal) for (tumor,normal) in zip(Tumor,Normal)]
+		expand("Align/{sample}.sorted.markdup.bqsr.bam",sample=samples),
+		expand("call/{tumor}.{normal}.paired.mutect2.vcf.gz",zip,tumor=Tumor,normal=Normal)
+
+include: "Lab.smk"
+
+rule Pon1:
+	input:
+		bam="Align/{normal}.sorted.markdup.bqsr.bam"
+	output:
+		"call/{normal}.pon.vcf.gz"
+	params:
+		NAME="{normal}",
+		gatk=config['gatk'],
+		genome=config['genome'],
+		AFgnomadVCF=config["AF_gnomadVCF"]
+	shell:
+		"""
+		{params.gatk} Mutect2 -R {params.genome} -I {input.bam} -tumor {params.NAME} --germline-resource {params.AFgnomadVCF} -O {output}
+		"""
+
+rule Pon2:
+	input:
+		"call/{normal}.pon.vcf.gz"
+	output:
+		"call/{normal}.PON.vcf.gz"
+	params:
+		gatk=config['gatk']
+	shell:
+		"""
+		{params.gatk} CreateSomaticPanelOfNormals -V {input} -O {output}
+		"""
+
+rule MutC:
+	input:
+		T="Align/{tumor}.sorted.markdup.bqsr.bam",
+		N="Align/{normal}.sorted.markdup.bqsr.bam",
+		PON="call/{normal}.PON.vcf.gz"
+	output:
+		vcf="call/{tumor}.{normal}.paired.mutect2.vcf.gz",
+		bam="call/{tumor}.{normal}.paired.mutect2.bam"
+	params:
+		gatk=config['gatk'],
+		genome=config['genome'],
+		TNAME="{tumor}",
+		NNAME="{normal}",
+		AFgnomadVCF=config["AF_gnomadVCF"],
+		AFOA="0.0000025"
+	shell:
+		"""
+		{params.gatk} Mutect2 -R {params.genome} -I {input.T} -I {input.N} -tumor {params.TNAME} -normal {params.NNAME} -pon {input.PON} --germline-resource {params.AFgnomadVCF} --af-of-alleles-not-in-resource {params.AFOA} --disable-read-filter MateOnSameContigOrNoMappedMateReadFilter -O {output.vcf} -bamout {output.bam}
+		"""
+##################################################################
