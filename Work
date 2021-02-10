@@ -3871,3 +3871,204 @@ cat /path/to/EGA/tumor/ANNOVAR/*.avinputs > /path/to/EGA/tumor/ANNOVAR/TP53.Tonl
 ##annotate
 table_annovar.pl /path/to/EGA/tumor/ANNOVAR/TP53.Tonly.avinput /path/to/annovar/humandb/ -buildver hg19 -out /path/to/EGA/tumor/ANNOVAR/TP53.Tonly -remove -protocol refGene,cytoBand,genomicSuperDups,esp6500siv2_all,1000g2015aug_all,snp138,dbnsfp30a,cosmic70,exac03,clinvar_20160302 -operation g,r,r,f,f,f,f,f,f,f --otherinfo
 ####################################################
+
+################
+genes_list<-read.csv("genes.list",sep="\t",header = FALSE,stringsAsFactors = FALSE)
+uniq_genes<-genes_list[!duplicated(genes_list[,1]),]
+library("biomaRt")
+mart<-biomaRt::useMart("ensembl","hsapiens_gene_ensembl")
+search_results<-biomaRt::getBM(attributes=c("external_gene_name","ensembl_gene_id","ensembl_transcript_id"),filters="external_gene_name",values=uniq_genes[,1],mart=mart)
+search_results<-biomaRt::getBM(attributes=c("external_gene_name","ensembl_gene_id","ensembl_transcript_id"),filters="external_gene_name",values=genes_symble,mart=mart)
+###########################
+import pysam
+import re
+import sys
+
+def ExtractSeq(chr,pos,end):
+	HG19_FILE="/data/home/minjiexu/Genome/hg19/hg19_LAM.fa"
+	HG19_FA=pysam.Fastafile(HG19_FILE)
+	tmp_seq=HG19_FA.fetch(chr,pos,end)
+	return(tmp_seq)
+
+Enzyme_Bst="CTGAG"
+Enzyme_Bsp="CTTCTCG"
+print("Chr\tPos\tEnd\tPrimer Name\tEnzyme Bst Position\tBst Counts\tEnzyme Bsp Position\tBsp Counts")
+with open(sys.argv[1],'r') as BED:
+	for bed in BED:
+		bed=bed.strip("\n")
+		INFO=bed.split("\t")
+		Search_Seq=ExtractSeq(INFO[0],INFO[1],INFO[2])
+		#Bst_Info=re.search(Enzyme_Bst,Search_Seq).span() # uniq match(Only one times)
+		#Bst_Pos=int(INFO[1])+int(Bst_Info[0])+1
+		Bst_Finder=re.finditer(Enzyme_Bst,Search_Seq)
+		Bst_Position=[]
+		Bst_Match_Times=0
+		for Bst_i in Bst_Finder:
+			Bst_Span=Bst_i.span()
+			Bst_Pos=int(INFO[1])+int(Bst_Span[0])+1
+			Bst_Position.append(str(Bst_Pos))
+			Bst_Match_Times+=1
+		Bst_Out=";".join(Bst_Position)
+
+		Bsp_Finder=re.finditer(Enzyme_Bsp,Search_Seq)
+		Bsp_Position=[]
+		Bsp_Match_Times=0
+		for Bsp_i in Bsp_Finder:
+			Bsp_Span=Bsp_i.span()
+			Bsp_Pos=int(INFO[1])+int(Bsp_Span[0])+1
+			Bsp_Position.append(str(Bsp_Pos))
+			Bsp_Match_Times+=1
+		Bsp_Out=";".join(Bsp_Position)
+		print("%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s" %(INFO[0],INFO[1],INFO[2],INFO[3],Bst_Out,Bst_Match_Times,Bsp_Out,Bsp_Match_Times))
+###################################
+#!/usr/bin/bash
+
+#Preparing the datasets
+Ref_Fasta=/data/home/guangleixie/Genome/genome.fasta #/data/home/minjiexu/Genome/BWAIndex/genome.fa
+Phase1K_VCF=/data/home/guangleixie/database/1000G_phase1.indels.b37.vcf.gz
+Mills_VCF=/data/home/guangleixie/database/Mills_and_1000G_gold_standard.indels.b37.vcf.gz
+HighConf_VCF=/data/home/guangleixie/database/1000G_phase1.snps.high_confidence.b37.vcf.gz
+AF_gnomad_VCF=/data/home/guangleixie/database/af-only-gnomad.raw.sites.b37.vcf.gz
+
+trimgalore="/data/home/minjiexu/bin/softwares/trim_galore_v0.4.0/trim_galore"
+cutadaptpath="/data/home/minjiexu/bin/softwares/cutadapt-1.8.1/bin/cutadapt"
+gatk="/data/home/guangleixie/Tools/gatk-4.1.9.0/gatk"
+
+function FastqToBam(){
+	#1. Step
+	echo "1.Step Requiring the Paired-End fastq files(R1 and R2)."
+	R1=$1
+	R2=$2
+	sample_name=$3 #`basename $R1 | awk -F "_" '{print $1}'`
+	threads=16
+	#if [[ ! -f "/data/home/minjiexu/Genome/BWAIndex/genome.fa.sa" ]]
+	#then
+	#	bwa index $Ref_Fasta
+	#fi
+	cleandir=`pwd`"/""trimfq"
+	if [[ ! -e $cleandir ]]
+	then
+		mkdir $cleandir
+	fi
+	$trimgalore --paired -q 20 --phred33 --stringency 3 --length 20 --path_to_cutadapt $cutadaptpath --output_dir $cleandir $R1 $R2
+
+	#2. Step
+	echo "2. Step Aligning the fastq to the reference genome."
+	trimR1=`find $cleandir | grep "_1"` #`ls $cleandir | grep "_1" | grep fastq`
+	trimR2=`find $cleandir | grep "_2"` #`ls $cleandir | grep "_2" | grep fastq`
+	bwa mem -t $threads -R "@RG\tID:${sample_name}\tSM:${sample_name}\tLB:${sample_name}\tPL:ILLUMINA" $Ref_Fasta $trimR1 $trimR2 > $sample_name.sam
+
+	#3. Step
+	echo "3. Step Sorting the bam."
+	$gatk SortSam -I $sample_name.sam -O $sample_name.sorted.bam -SO coordinate
+	#samtools sort -@ 8 -o $sample_name.sorted.bam $sample_name.sam
+	#samtools index $sample_name.sorted.bam
+
+	#4. Step 
+	echo "4. Step Removing the duplicate reads."
+	$gatk MarkDuplicates -I $sample_name.sorted.bam -O $sample_name.sorted.markDup.bam -M $sample_name.sorted.markDup.txt --REMOVE_DUPLICATES false
+
+	#if not -R in bwa alignment step, it will use the AddOrReplaceReadGroups of the gatk(It can change the groups.)
+#$gatk AddOrReplaceReadGroups -I $sample_name.sorted.markDup.bam -O $sample_name.sorted.markDup.AddGroup.bam -LB ${sample_name} -PL illumina -PU ${sample_name} -SM ${sample_name}
+
+	$gatk BuildBamIndex -I $sample_name.sorted.markDup.bam
+	#samtools index $sample_name.sorted.markDup.bam
+
+	#5. Step
+	echo "5. Step Locally align in indel region for recalibrating."
+	$gatk BaseRecalibrator -I $sample_name.sorted.markDup.bam -R $Ref_Fasta --known-sites $Phase1K_VCF --known-sites $Mills_VCF -O $sample_name.baserecal.table
+
+	#6. Step
+	echo "6. Step BQSR"
+	$gatk ApplyBQSR -R $Ref_Fasta -I $sample_name.sorted.markDup.bam --bqsr-recal-file $sample_name.baserecal.table -O $sample_name.sorted.markdup.bqsr.bam
+
+	#return "FastqToBam has been finished!"
+}
+#######################################################################################################################
+
+function MutectCall(){
+	#Building the panel of normals(One or multiple-samples)
+	tumor_bam=$1
+	normal_bam=$2
+	tumor_name=$3
+	normal_name=$4
+	
+	target='/data/home/guangleixie/LAB/somatic/test1/target.bed'
+	$gatk Mutect2 -R $Ref_Fasta -I $normal_bam -tumor ${normal_name} --germline-resource $AF_gnomad_VCF -O $normal_name.pon.vcf.gz
+	#$gatk ...
+
+	#merging the multi-pon vcf files to PON
+	$gatk CreateSomaticPanelOfNormals -V $normal_name.pon.vcf.gz -O $normal_name.PoN.vcf.gz
+	#$gatk CreateSomaticPnaleOfNormals -vcfs $normal1..pon.vcf.gz -vcfs $normal2.pon.vcf.gz -vcfs $normal3.pon.vcf.gz --min-sample-count 2 -O PoN.3Samples.vcf.gz
+
+	#Calling variants by the Mutect2 paire-samples
+	$gatk Mutect2 -R $Ref_Fasta -I ${tumor_bam} -I ${normal_bam} -tumor ${tumor_name} -normal ${normal_name} -pon $normal_name.PoN.vcf.gz --germline-resource $AF_gnomad_VCF --af-of-alleles-not-in-resource 0.0000025 --disable-read-filter MateOnSameContigOrNoMappedMateReadFilter -O ${tumor_name}.${normal_name}.paired.vcf.gz -bamout ${tumor_name}.${normal_name}.mutect.bam
+
+	#Filtering 
+	#One
+#	$gatk GetPileupSummaries -I ${tumor_bam} -L ${target} -V ${HighConf_VCF} -O $tumor_name.summaries.table
+	#-V ${Phase1K_VCF} -V ${Mills_VCF}
+#	$gatk CalculateContamination -I ${tumor_name}.summaries.table -O $tumor_name.calculatecontamination.table
+
+#	$gatk FilterMutectCalls -R $Ref_Fasta -V ${tumor_name}.${normal_name}.paired.vcf.gz --contamination-table $tumor_name.calculatecontamination.table -O ${tumor_name}.${normal_name}.somtic.vcf.gz
+
+	#Two
+	$gatk CollectSequencingArtifactMetrics -R $Ref_Fasta -I ${tumor_bam} -O $tumor_name.artifact -EXT ".txt" 
+
+	#$gatk FilterByOrientationBias -V ${tumor_name}.${normal_name}.vcf.gz --artifact-modes "G/T" -P $tumor_name.artifact.preadapter.detail.metrics.txt -O $tumor_name.$normal_name.somatic.vcf.gz
+	
+}
+########################################################################################################################
+
+function VardictCall(){
+	#Vardict calling variants
+	vardict="/data/home/guangleixie/Tools/VarDict-1.8.2"
+	echo "${vardict}"
+	AF_THR="0.01" #minimum allele frequency
+	target="/data/home/guangleixie/LAB/somatic/test1/target.bed"
+	Tbam=$1
+	Nbam=$2
+	tumor_name=$3 #`echo $Tbam | awk -F "_" '{print $1}'`
+	normal_name=$4 #`echo $Nbam | awk -F "_" '{print $1}'`
+	$vardict/vardict -G $Ref_Fasta -f $AF_THR -N $tumor_name -b "$Tbam|$Nbam" -c 1 -S 2 -E 3 -g 4 $target | $vardict/testsomatic.R | $vardict/var2vcf_paired.pl -N "$tumor_name|$normal_name" -f $AF_THR > ${tumor_name}.${normal_name}_vardict.vcf
+
+}
+
+function Algin(){
+	echo "This script is for somatic variants calling"
+	TR1=$1
+	TR2=$2
+	NR1=$3
+	NR2=$4
+	Tname=$5
+	Nname=$6
+	FastqToBam $TR1 $TR2 $Tname &
+	FastqToBam $NR1 $NR2 $Nname &
+}
+
+cat $1 | while read line
+do
+{
+	record=(`echo $line | awk -F "\t" '{print $1,$2,$3,$4,$5,$6}'`)
+	FastqToBam ${record[0]} ${record[1]} ${record[4]}
+	echo -e "\n\t#############################\n"	
+	FastqToBam ${record[2]} ${record[3]} ${record[5]}
+	echo "Calling Variants ......"
+	tumor_bam=`ls ./ | grep bqsr | grep bam | grep ${record[4]}`
+	normal_bam=`ls ./ | grep bqsr | grep bam | grep ${record[5]}`
+	echo -e "Tumor bqsr bam: $tumor_bam\n"
+	echo -e "Normal bqsr bam: $normal_bam"
+	echo -e "\n\t#############################\n"
+	echo "Mutect2 Calling ......"
+	MutectCall $tumor_bam $normal_bam ${record[4]} ${record[5]}
+#	echo "Vardict Calling ..."
+#	VardictCall $tumor_bam $normal_bam ${record[4]} ${record[5]}
+}
+done
+#wait ## paralling
+echo "Finished!!!"
+#######################
+
+
+
+
